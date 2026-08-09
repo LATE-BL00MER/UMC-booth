@@ -5,6 +5,13 @@ import { describe, expect, it, vi } from "vitest";
 import { ResetControl } from "../../../src/operator/components/ResetControl.js";
 
 describe("ResetControl", () => {
+  it("keeps the reset trigger fixed in the upper-right viewport", () => {
+    render(<ResetControl onConfirm={() => undefined} />);
+
+    const container = screen.getByRole("button", { name: "처음으로" }).parentElement;
+    expect(container).toHaveStyle({ position: "fixed", top: "16px", right: "16px" });
+  });
+
   it("renders only the approved reset question and buttons", async () => {
     const user = userEvent.setup();
     render(<ResetControl onConfirm={() => undefined} />);

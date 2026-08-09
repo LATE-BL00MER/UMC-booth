@@ -7,7 +7,7 @@ export interface FrameScreenProps {
   frames: readonly FrameManifest[];
   selectedFrameId: string | null;
   onFrameSelect(id: string): void;
-  onContinue(): void;
+  onContinue(frameId: string): void;
 }
 
 export function FrameScreen({
@@ -23,6 +23,11 @@ export function FrameScreen({
   const selectedPhotos = selectedIds
     .map((id) => photosById.get(id))
     .filter((photo): photo is CapturedPhoto => photo !== undefined);
+  const continueWithSelectedFrame = () => {
+    if (hasSelectedFrame && selectedFrameId !== null) {
+      onContinue(selectedFrameId);
+    }
+  };
 
   return (
     <section aria-label="프레임 선택">
@@ -47,7 +52,7 @@ export function FrameScreen({
           </label>
         ))}
       </div>
-      <button type="button" onClick={onContinue} disabled={!hasSelectedFrame}>
+      <button type="button" onClick={continueWithSelectedFrame} disabled={!hasSelectedFrame}>
         이 프레임으로 사진 만들기
       </button>
     </section>

@@ -89,7 +89,7 @@ describe("FrameScreen", () => {
     );
     expect(continueButton).toBeEnabled();
     await user.click(continueButton);
-    expect(onContinue).toHaveBeenCalledOnce();
+    expect(onContinue).toHaveBeenCalledExactlyOnceWith("basic");
   });
 
   it("does not confirm an ID that is not one of the displayed frames", () => {

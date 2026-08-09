@@ -48,7 +48,7 @@ export function ResetControl({ onConfirm }: ResetControlProps) {
   };
 
   return (
-    <div style={{ position: "absolute", top: 16, right: 16 }}>
+    <div style={{ position: "fixed", top: 16, right: 16 }}>
       <button ref={resetButtonRef} type="button" onClick={() => setIsDialogOpen(true)}>
         처음으로
       </button>
