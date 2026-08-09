@@ -1,0 +1,8 @@
+:root { color-scheme: light; font-family: system-ui, sans-serif; }
+body { margin: 0; background: #f6f4ef; color: #1b1a18; }
+.recipient-page { box-sizing: border-box; display: grid; gap: 1rem; margin: 0 auto; max-width: 34rem; min-height: 100vh; padding: 2rem 1.25rem; place-content: center; text-align: center; }
+.recipient-page h1 { font-size: 1.5rem; margin: 0; }
+.recipient-page img { border-radius: 0.75rem; box-shadow: 0 0.75rem 2rem #0002; max-height: 65vh; max-width: 100%; }
+.recipient-page button, .recipient-page a { border-radius: 0.5rem; box-sizing: border-box; font: inherit; padding: 0.875rem 1rem; text-decoration: none; width: 100%; }
+.recipient-page button { background: #1b1a18; border: 0; color: #fff; cursor: pointer; }
+.recipient-page a { background: #fff; color: #1b1a18; }

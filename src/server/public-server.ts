@@ -1,4 +1,6 @@
+import { readFileSync } from "node:fs";
 import Fastify, { type FastifyInstance, type FastifyReply } from "fastify";
+import type { AppConfig } from "../shared/config";
 import { AggregateMetrics, type AggregateEvent } from "./metrics";
 import { safeStatusFor, sendSafeError } from "./safe-error";
 import type { FileSessionStore, SessionLookup } from "./session-store";
@@ -14,13 +16,16 @@ const events = new Set<AggregateEvent>(["decrypt_success", "save_intent", "join_
 
 export interface PublicServerDependencies {
   store: FileSessionStore;
-  recipientHtml: string;
+  config?: Pick<AppConfig, "joinSiteUrl">;
+  recipientHtml?: string;
+  recipientTemplatePath?: string;
   metrics?: AggregateMetrics;
 }
 
 export function buildPublicServer(deps: PublicServerDependencies): FastifyInstance {
   const app = Fastify({ logger: false });
   const metrics = deps.metrics ?? new AggregateMetrics();
+  const recipientHtml = loadRecipientHtml(deps);
 
   app.addHook("onRequest", async (_request, reply) => {
     reply.header("cache-control", "no-store");
@@ -37,7 +42,7 @@ export function buildPublicServer(deps: PublicServerDependencies): FastifyInstan
       return;
     }
     metrics.recordPage();
-    return reply.type("text/html; charset=utf-8").send(deps.recipientHtml);
+    return reply.type("text/html; charset=utf-8").send(recipientHtml);
   });
 
   app.get<{ Params: { token: string } }>("/f/:token", async (request, reply) => {
@@ -60,6 +65,16 @@ export function buildPublicServer(deps: PublicServerDependencies): FastifyInstan
   });
 
   return app;
+}
+
+function loadRecipientHtml(deps: PublicServerDependencies): string {
+  if (!deps.recipientTemplatePath || !deps.config) {
+    return deps.recipientHtml ?? "";
+  }
+  const template = readFileSync(deps.recipientTemplatePath, "utf8");
+  const serializedJoinUrl = JSON.stringify(deps.config.joinSiteUrl).replaceAll("<", "\\u003c");
+  const joinConfigScript = `<script>window.__UMC_JOIN_SITE_URL__=${serializedJoinUrl}</script>`;
+  return template.replace("__JOIN_CONFIG_SCRIPT__", joinConfigScript);
 }
 
 function sendLookupStatus(lookup: SessionLookup, reply: FastifyReply): lookup is Extract<SessionLookup, { kind: "active" }> {
