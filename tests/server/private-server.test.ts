@@ -1,4 +1,4 @@
-import { mkdtemp } from "node:fs/promises";
+import { mkdtemp, readdir, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -53,7 +53,7 @@ async function createPrivateApp() {
   };
   const app = buildPrivateServer({ store, config, runtimeStatus, operatorBuildDir: join(root, "operator") });
   await app.ready();
-  return { app, availability, runtimeStatus, store };
+  return { app, availability, root, runtimeStatus, store };
 }
 
 describe("private server", () => {
@@ -182,6 +182,23 @@ describe("private server", () => {
 
     expect(resolved.statusCode).toBe(200);
     expect(resolved.json()).toEqual({ status: "active", publicToken: active.publicToken, expiresAt: active.expiresAt });
+  });
+
+  it("returns the fixed deleted response and removes artifacts for corrupt activation metadata", async () => {
+    const context = await createPrivateApp();
+    apps.push(context.app);
+    const pending = await context.store.createPending(new Uint8Array([1]));
+    const sessionRoot = join(context.root, "sessions");
+    await writeFile(join(sessionRoot, `${pending.id}.json`), "{private parse detail");
+    await writeFile(join(sessionRoot, `${pending.id}.bin.deadbeef.tmp`), new Uint8Array([2]));
+
+    const response = await context.app.inject({ method: "POST", url: `/api/sessions/${pending.id}/resolve` });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual({ status: "deleted" });
+    expect(response.body).not.toContain("private parse detail");
+    expect(response.body).not.toContain(pending.id);
+    expect(await readdir(sessionRoot)).toEqual([]);
   });
 
   it("does not retain the replaced activation lookup endpoint", async () => {

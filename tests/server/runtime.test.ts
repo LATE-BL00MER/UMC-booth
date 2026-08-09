@@ -223,6 +223,159 @@ describe("event runtime", () => {
     });
   });
 
+  it("times out a never-healthy tunnel startup and rolls back listeners and storage", async () => {
+    vi.useFakeTimers();
+    const tunnelStartCalled = deferred<void>();
+    const order: string[] = [];
+    const harness = createHarness({
+      store: {
+        initialize: async () => { order.push("store:initialize"); },
+        sweep: async () => { order.push("store:sweep"); return { deletedPending: 0, deletedExpired: 0 }; },
+        purgeAll: async () => { order.push("store:purge-all"); return 0; },
+        stats: async () => ({ pending: 0, active: 0, encryptedBytes: 0, lastSweepAt: 1_000 }),
+      },
+      createPublicServer: () => ({
+        listen: async () => { order.push("public:listen"); return "http://127.0.0.1:4174"; },
+        close: async () => { order.push("public:close"); },
+      }),
+      createPrivateServer: () => ({
+        listen: async () => { order.push("private:listen"); return "http://127.0.0.1:4173"; },
+        close: async () => { order.push("private:close"); },
+      }),
+      tunnel: {
+        start: async () => { order.push("tunnel:start"); tunnelStartCalled.resolve(); await new Promise(() => undefined); },
+        stop: async () => { order.push("tunnel:stop"); },
+        status: () => ({ state: "starting", publicUrl: null, latencyMs: null, error: null }),
+      },
+      timers: undefined,
+      safetyStepTimeoutMs: 10,
+      tunnelStartupTimeoutMs: 25,
+    });
+    const runtime = createRuntime(harness.dependencies);
+
+    try {
+      const starting = runtime.start();
+      const startupFailure = starting.catch((error: unknown) => error);
+      await tunnelStartCalled.promise;
+      await vi.advanceTimersByTimeAsync(25);
+
+      expect(await startupFailure).toMatchObject({ message: "Runtime startup failed" });
+      expect(order).toEqual([
+        "store:initialize",
+        "store:sweep",
+        "public:listen",
+        "private:listen",
+        "tunnel:start",
+        "store:purge-all",
+        "tunnel:stop",
+        "private:close",
+        "store:purge-all",
+        "public:close",
+      ]);
+      expect((await runtime.getStatus()).acceptingCaptures).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("routes a signal received during pending tunnel startup through purge and settles start", async () => {
+    for (const signal of ["SIGINT", "SIGTERM"] as const) {
+      const tunnelStartCalled = deferred<void>();
+      const releaseTunnelStart = deferred<void>();
+      const exit = vi.fn();
+      const harness = createHarness({
+        tunnel: {
+          start: async () => {
+            tunnelStartCalled.resolve();
+            await releaseTunnelStart.promise;
+          },
+          stop: async () => {
+            harness.order.push("tunnel:stop");
+            releaseTunnelStart.resolve();
+          },
+          status: () => ({ state: "down", publicUrl: null, latencyMs: null, error: null }),
+        },
+        exit,
+      });
+      const runtime = createRuntime(harness.dependencies);
+      const starting = runtime.start();
+      const startupFailure = starting.catch((error: unknown) => error);
+      await tunnelStartCalled.promise;
+      harness.order.splice(0);
+
+      harness.signal(signal);
+      expect(await startupFailure).toMatchObject({ message: "Runtime startup failed" });
+      await runtime.requestShutdown();
+
+      expect(harness.order).toEqual(["store:purge-all", "tunnel:stop", "private:close", "store:purge-all", "public:close"]);
+      expect(exit).toHaveBeenCalledWith(0);
+      expect((await runtime.getStatus()).acceptingCaptures).toBe(false);
+    }
+  });
+
+  it("attempts every bounded startup rollback step when earlier cleanup fails", async () => {
+    vi.useFakeTimers();
+    const privateCloseStarted = deferred<void>();
+    const order: string[] = [];
+    let privateCloseCalls = 0;
+    let privateCloseHangs = true;
+    let tunnelStopFails = true;
+    const harness = createHarness({
+      store: {
+        initialize: async () => undefined,
+        sweep: async () => ({ deletedPending: 0, deletedExpired: 0 }),
+        purgeAll: async () => { order.push("purge"); return 0; },
+        stats: async () => ({ pending: 0, active: 0, encryptedBytes: 0, lastSweepAt: 1_000 }),
+      },
+      createPublicServer: () => ({
+        listen: async () => "http://127.0.0.1:4174",
+        close: async () => { order.push("public:close"); },
+      }),
+      createPrivateServer: () => ({
+        listen: async () => "http://127.0.0.1:4173",
+        close: async () => {
+          order.push("private:close");
+          privateCloseCalls += 1;
+          privateCloseStarted.resolve();
+          if (privateCloseHangs) await new Promise(() => undefined);
+        },
+      }),
+      tunnel: {
+        start: async () => { throw new Error("sensitive tunnel detail"); },
+        stop: async () => {
+          order.push("tunnel:stop");
+          if (tunnelStopFails) throw new Error("sensitive stop detail");
+        },
+        status: () => ({ state: "down", publicUrl: null, latencyMs: null, error: "process-exit" }),
+      },
+      timers: undefined,
+      safetyStepTimeoutMs: 10,
+    });
+    const runtime = createRuntime(harness.dependencies);
+
+    try {
+      const starting = runtime.start();
+      const startupFailure = starting.catch((error: unknown) => error);
+      await privateCloseStarted.promise;
+      await vi.advanceTimersByTimeAsync(10);
+      const failure = await startupFailure;
+
+      expect(failure).toBeInstanceOf(AggregateError);
+      expect(String(failure)).toBe("AggregateError: Runtime startup failed");
+      expect(String(failure)).not.toContain("sensitive");
+      expect(order).toEqual(["purge", "tunnel:stop", "private:close", "purge", "public:close"]);
+
+      order.splice(0);
+      privateCloseHangs = false;
+      tunnelStopFails = false;
+      await runtime.stop({ purge: true });
+      expect(privateCloseCalls).toBe(2);
+      expect(order).toEqual(["purge", "tunnel:stop", "private:close", "purge"]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("blocks captures, purges, stops the tunnel, then closes private and public listeners", async () => {
     const harness = createHarness();
     const runtime = createRuntime(harness.dependencies);
@@ -455,6 +608,61 @@ describe("event runtime", () => {
 
     expect(sweepCalls).toBe(3);
     expect((await runtime.getStatus()).acceptingCaptures).toBe(true);
+  });
+
+  it("bounds a hung queued sweep, completes every shutdown safety step, and exits nonzero", async () => {
+    vi.useFakeTimers();
+    const hungSweep = deferred<void>();
+    const order: string[] = [];
+    let sweepCalls = 0;
+    const exit = vi.fn();
+    const harness = createHarness({
+      store: {
+        initialize: async () => undefined,
+        sweep: async () => {
+          sweepCalls += 1;
+          if (sweepCalls > 1) await hungSweep.promise;
+          return { deletedPending: 0, deletedExpired: 0 };
+        },
+        purgeAll: async () => { order.push("purge"); return 0; },
+        stats: async () => ({ pending: 0, active: 0, encryptedBytes: 0, lastSweepAt: 1_000 }),
+      },
+      createPublicServer: () => ({
+        listen: async () => "http://127.0.0.1:4174",
+        close: async () => { order.push("public:close"); },
+      }),
+      createPrivateServer: () => ({
+        listen: async () => "http://127.0.0.1:4173",
+        close: async () => { order.push("private:close"); },
+      }),
+      tunnel: {
+        start: async () => undefined,
+        stop: async () => { order.push("tunnel:stop"); },
+        status: () => ({ state: "healthy", publicUrl: "https://booth.example", latencyMs: 1, error: null }),
+      },
+      timers: undefined,
+      safetyStepTimeoutMs: 10,
+      exit,
+    });
+    const runtime = createRuntime(harness.dependencies);
+
+    try {
+      await runtime.start();
+      await vi.advanceTimersByTimeAsync(30_000);
+      expect(sweepCalls).toBe(2);
+
+      const shutdown = runtime.requestShutdown();
+      await Promise.resolve();
+      expect(exit).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(10);
+      await shutdown;
+
+      expect(order).toEqual(["purge", "tunnel:stop", "private:close", "purge", "public:close"]);
+      expect(exit).toHaveBeenCalledWith(1);
+    } finally {
+      hungSweep.resolve();
+      vi.useRealTimers();
+    }
   });
 
   it("routes SIGINT and SIGTERM through the same purge path and exits zero", async () => {

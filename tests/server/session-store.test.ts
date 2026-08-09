@@ -183,6 +183,28 @@ describe("FileSessionStore", () => {
     expect(await readdir(root)).toEqual([]);
   });
 
+  it("treats corrupt activation metadata as unreadable and removes every session artifact", async () => {
+    const { root, store } = await createStore();
+    const pending = await store.createPending(new Uint8Array([7, 8, 9]));
+    await writeFile(join(root, `${pending.id}.json`), "{private parse detail");
+    await writeFile(join(root, `${pending.id}.json.deadbeef.tmp`), "partial metadata");
+    await writeFile(join(root, `${pending.id}.bin.deadbeef.tmp`), new Uint8Array([1]));
+
+    await expect(store.resolveActivationOrDelete(pending.id)).resolves.toEqual({ status: "deleted" });
+    expect(await readdir(root)).toEqual([]);
+  });
+
+  it("removes orphan ciphertext and temporary artifacts when activation metadata is missing", async () => {
+    const { root, store } = await createStore();
+    const pending = await store.createPending(new Uint8Array([7, 8, 9]));
+    await rm(join(root, `${pending.id}.json`));
+    await writeFile(join(root, `${pending.id}.json.deadbeef.tmp`), "partial metadata");
+    await writeFile(join(root, `${pending.id}.bin.deadbeef.tmp`), new Uint8Array([1]));
+
+    await expect(store.resolveActivationOrDelete(pending.id)).resolves.toEqual({ status: "deleted" });
+    expect(await readdir(root)).toEqual([]);
+  });
+
   it("does not recover an active session when its ciphertext is missing", async () => {
     const { root, store } = await createStore();
     const pending = await store.createPending(new Uint8Array([7, 8, 9]));

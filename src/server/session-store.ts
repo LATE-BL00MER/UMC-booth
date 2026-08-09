@@ -198,7 +198,13 @@ export class FileSessionStore {
       return { status: "deleted" };
     }
     return this.withSessionLock(id, async () => {
-      const record = await this.readRecord(id);
+      let record: SessionRecord | null;
+      try {
+        record = await this.readRecord(id);
+      } catch {
+        await this.deleteSessionArtifacts(id);
+        return { status: "deleted" };
+      }
       const now = this.clock.now();
       if (record?.status === "active" && record.expiresAt !== null && record.expiresAt > now) {
         try {
@@ -214,9 +220,7 @@ export class FileSessionStore {
           }
         }
       }
-      if (record) {
-        await this.deleteSession(id);
-      }
+      await this.deleteSessionArtifacts(id);
       return { status: "deleted" };
     });
   }
@@ -382,6 +386,17 @@ export class FileSessionStore {
       this.fileSystem.rm(this.binPath(id), { force: true }),
       this.fileSystem.rm(this.jsonPath(id), { force: true }),
     ]);
+  }
+
+  private async deleteSessionArtifacts(id: string): Promise<void> {
+    this.assertSessionId(id);
+    const recognizedArtifact = new RegExp(`^${id}\\.(?:bin|json)(?:\\.[0-9a-f]+\\.tmp)?$`);
+    const entries = await this.fileSystem.readdir(this.root);
+    await Promise.all(
+      entries
+        .filter((entry) => recognizedArtifact.test(entry))
+        .map((entry) => this.fileSystem.rm(join(this.root, entry), { force: true })),
+    );
   }
 
   private async withSessionLock<T>(id: string, operation: () => Promise<T>): Promise<T> {

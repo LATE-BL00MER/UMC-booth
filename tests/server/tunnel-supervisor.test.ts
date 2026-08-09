@@ -266,4 +266,24 @@ describe("TunnelSupervisor", () => {
     });
     expect(harness.timers.delays).toEqual([]);
   });
+
+  it("settles pending startup and cancels relaunch when stopped during retry backoff", async () => {
+    const harness = createHarness();
+    const start = harness.supervisor.start("http://127.0.0.1:4174");
+    harness.children[0]!.exit();
+    expect(harness.supervisor.status()).toMatchObject({ state: "down", error: "process-exit" });
+    expect(harness.timers.delays).toContain(1_000);
+
+    harness.supervisor.stop();
+
+    await expect(start).resolves.toBeUndefined();
+    expect(harness.supervisor.status()).toEqual({
+      state: "down",
+      publicUrl: null,
+      latencyMs: null,
+      error: null,
+    });
+    expect(() => harness.timers.runNext(1_000)).toThrow("No timer scheduled");
+    expect(harness.children).toHaveLength(1);
+  });
 });

@@ -4,6 +4,8 @@ import type { RuntimeStatus, RuntimeStatusProvider } from "./types";
 import type { TunnelStatus } from "./tunnel-supervisor";
 
 const loopbackHost = "127.0.0.1";
+const defaultSafetyStepTimeoutMs = 5_000;
+const defaultTunnelStartupTimeoutMs = 30_000;
 
 export interface RuntimeServer {
   listen(options: { host: string; port: number }): Promise<string>;
@@ -26,6 +28,8 @@ export interface RuntimeTunnel {
 export interface RuntimeTimers {
   setInterval(callback: () => void | Promise<void>, delayMs: number): unknown;
   clearInterval(timer: unknown): void;
+  setTimeout?(callback: () => void, delayMs: number): unknown;
+  clearTimeout?(timer: unknown): void;
 }
 
 export interface RuntimeSignals {
@@ -47,6 +51,8 @@ export interface RuntimeDependencies {
   timers?: RuntimeTimers;
   signals?: RuntimeSignals;
   exit?: (code: number) => void;
+  safetyStepTimeoutMs?: number;
+  tunnelStartupTimeoutMs?: number;
 }
 
 export interface EventRuntime extends RuntimeStatusProvider {
@@ -57,6 +63,8 @@ export interface EventRuntime extends RuntimeStatusProvider {
 const defaultTimers: RuntimeTimers = {
   setInterval: (callback, delayMs) => setInterval(() => void callback(), delayMs),
   clearInterval: (timer) => clearInterval(timer as ReturnType<typeof setInterval>),
+  setTimeout: (callback, delayMs) => setTimeout(callback, delayMs),
+  clearTimeout: (timer) => clearTimeout(timer as ReturnType<typeof setTimeout>),
 };
 
 const defaultSignals: RuntimeSignals = {
@@ -68,6 +76,8 @@ export function createRuntime(deps: RuntimeDependencies): EventRuntime {
   const timers = deps.timers ?? defaultTimers;
   const signals = deps.signals ?? defaultSignals;
   const exit = deps.exit ?? ((code) => process.exit(code));
+  const safetyStepTimeoutMs = deps.safetyStepTimeoutMs ?? defaultSafetyStepTimeoutMs;
+  const tunnelStartupTimeoutMs = deps.tunnelStartupTimeoutMs ?? defaultTunnelStartupTimeoutMs;
   const tunnel = tunnelFor(deps);
   let publicServer: RuntimeServer | null = null;
   let privateServer: RuntimeServer | null = null;
@@ -76,44 +86,29 @@ export function createRuntime(deps: RuntimeDependencies): EventRuntime {
   let sweepQueue: Promise<void> = Promise.resolve();
   let started = false;
   let acceptingCaptures = false;
+  let shutdownRequested = false;
+  let signalHandlersInstalled = false;
+  let startupPromise: Promise<void> | null = null;
   let shutdownPromise: Promise<void> | null = null;
 
   const runtime: EventRuntime = {
-    async start() {
-      if (started) return;
-      assertLocalMode(deps.config);
-      acceptingCaptures = false;
-
+    start() {
+      if (started) return Promise.resolve();
+      if (startupPromise !== null) return startupPromise;
       try {
-        await deps.store.initialize();
-        if (deps.config.tunnelMode === "local") {
-          await deps.store.purgeAll();
-        }
-        await deps.store.sweep();
-        sweepHealthy = true;
-
-        publicServer = deps.createPublicServer();
-        await publicServer.listen({ host: loopbackHost, port: deps.config.publicPort });
-        privateServer = deps.createPrivateServer(runtime);
-        await privateServer.listen({ host: loopbackHost, port: deps.config.privatePort });
-
-        await tunnel.start(`http://${loopbackHost}:${deps.config.publicPort}`);
-        const tunnelStatus = tunnel.status();
-        if (tunnelStatus.state !== "healthy" || tunnelStatus.publicUrl === null) {
-          throw new Error("Public tunnel preflight failed");
-        }
-
-        started = true;
-        acceptingCaptures = true;
-        sweepTimer = timers.setInterval(runSweep, deps.config.sweepIntervalMs);
-        signals.once("SIGINT", requestSignalShutdown);
-        signals.once("SIGTERM", requestSignalShutdown);
+        assertLocalMode(deps.config);
       } catch (error) {
-        acceptingCaptures = false;
-        sweepHealthy = false;
-        await closeStartedComponents();
-        throw error;
+        return Promise.reject(error);
       }
+      shutdownRequested = false;
+      acceptingCaptures = false;
+      installSignalHandlers();
+
+      const starting = startRuntime().finally(() => {
+        if (startupPromise === starting) startupPromise = null;
+      });
+      startupPromise = starting;
+      return starting;
     },
 
     async getStatus(): Promise<RuntimeStatus> {
@@ -138,6 +133,7 @@ export function createRuntime(deps: RuntimeDependencies): EventRuntime {
     },
 
     async stop(options: { purge: boolean }): Promise<void> {
+      shutdownRequested = true;
       acceptingCaptures = false;
       started = false;
       removeSignalHandlers();
@@ -145,33 +141,29 @@ export function createRuntime(deps: RuntimeDependencies): EventRuntime {
         timers.clearInterval(sweepTimer);
         sweepTimer = null;
       }
-      await sweepQueue;
       const errors: unknown[] = [];
+      await attempt(() => sweepQueue, "queued sweep", errors);
       if (options.purge) {
-        try {
-          await deps.store.purgeAll();
-        } catch {
-          // The definitive purge runs after the private listener drains.
-        }
+        await attempt(() => deps.store.purgeAll(), "initial purge", errors);
       }
-      await attempt(() => tunnel.stop(), errors);
+      await attempt(() => tunnel.stop(), "tunnel stop", errors);
       if (privateServer !== null) {
         const server = privateServer;
-        if (await attempt(() => server.close(), errors)) {
+        if (await attempt(() => server.close(), "private listener close", errors)) {
           privateServer = null;
         }
       }
       if (options.purge) {
-        await attempt(() => deps.store.purgeAll(), errors);
+        await attempt(() => deps.store.purgeAll(), "definitive purge", errors);
       }
       if (publicServer !== null) {
         const server = publicServer;
-        if (await attempt(() => server.close(), errors)) {
+        if (await attempt(() => server.close(), "public listener close", errors)) {
           publicServer = null;
         }
       }
       if (deps.metrics) {
-        await attempt(() => deps.metrics!.drainPersistence(), errors);
+        await attempt(() => deps.metrics!.drainPersistence(), "metrics drain", errors);
       }
       if (errors.length > 0) {
         throw new AggregateError(errors, "Runtime shutdown was incomplete");
@@ -193,6 +185,57 @@ export function createRuntime(deps: RuntimeDependencies): EventRuntime {
     },
   };
 
+  async function startRuntime(): Promise<void> {
+    try {
+      await deps.store.initialize();
+      assertStartupActive();
+      if (deps.config.tunnelMode === "local") {
+        await deps.store.purgeAll();
+        assertStartupActive();
+      }
+      await deps.store.sweep();
+      assertStartupActive();
+      sweepHealthy = true;
+
+      publicServer = deps.createPublicServer();
+      await publicServer.listen({ host: loopbackHost, port: deps.config.publicPort });
+      assertStartupActive();
+      privateServer = deps.createPrivateServer(runtime);
+      await privateServer.listen({ host: loopbackHost, port: deps.config.privatePort });
+      assertStartupActive();
+
+      await withDeadline(
+        () => tunnel.start(`http://${loopbackHost}:${deps.config.publicPort}`),
+        "tunnel startup",
+        tunnelStartupTimeoutMs,
+      );
+      assertStartupActive();
+      const tunnelStatus = tunnel.status();
+      if (tunnelStatus.state !== "healthy" || tunnelStatus.publicUrl === null) {
+        throw new Error("Public tunnel preflight failed");
+      }
+
+      started = true;
+      acceptingCaptures = true;
+      sweepTimer = timers.setInterval(runSweep, deps.config.sweepIntervalMs);
+    } catch {
+      acceptingCaptures = false;
+      started = false;
+      sweepHealthy = false;
+      if (shutdownRequested) {
+        throw new Error("Runtime startup failed");
+      }
+      const cleanupErrors = await rollbackStartedComponents();
+      if (cleanupErrors.length > 0) {
+        throw new AggregateError(
+          [new Error("startup preflight failed"), ...cleanupErrors],
+          "Runtime startup failed",
+        );
+      }
+      throw new Error("Runtime startup failed");
+    }
+  }
+
   function runSweep(): Promise<void> {
     const scheduled = sweepQueue.then(async () => {
       try {
@@ -210,39 +253,94 @@ export function createRuntime(deps: RuntimeDependencies): EventRuntime {
     void runtime.requestShutdown();
   }
 
-  function removeSignalHandlers(): void {
-    signals.off("SIGINT", requestSignalShutdown);
-    signals.off("SIGTERM", requestSignalShutdown);
+  function installSignalHandlers(): void {
+    if (signalHandlersInstalled) return;
+    signals.once("SIGINT", requestSignalShutdown);
+    signals.once("SIGTERM", requestSignalShutdown);
+    signalHandlersInstalled = true;
   }
 
-  async function closeStartedComponents(): Promise<void> {
+  function removeSignalHandlers(): void {
+    if (!signalHandlersInstalled) return;
+    signals.off("SIGINT", requestSignalShutdown);
+    signals.off("SIGTERM", requestSignalShutdown);
+    signalHandlersInstalled = false;
+  }
+
+  async function rollbackStartedComponents(): Promise<unknown[]> {
     if (sweepTimer !== null) {
       timers.clearInterval(sweepTimer);
       sweepTimer = null;
     }
     removeSignalHandlers();
-    await tunnel.stop();
+    const errors: unknown[] = [];
+    await attempt(() => deps.store.purgeAll(), "startup initial purge", errors);
+    await attempt(() => tunnel.stop(), "startup tunnel stop", errors);
     if (privateServer !== null) {
-      await privateServer.close();
-      privateServer = null;
+      const server = privateServer;
+      if (await attempt(() => server.close(), "startup private listener close", errors)) {
+        privateServer = null;
+      }
     }
+    await attempt(() => deps.store.purgeAll(), "startup definitive purge", errors);
     if (publicServer !== null) {
-      await publicServer.close();
-      publicServer = null;
+      const server = publicServer;
+      if (await attempt(() => server.close(), "startup public listener close", errors)) {
+        publicServer = null;
+      }
+    }
+    return errors;
+  }
+
+  function assertStartupActive(): void {
+    if (shutdownRequested) throw new Error("Runtime startup cancelled");
+  }
+
+  async function attempt(
+    operation: () => unknown | Promise<unknown>,
+    label: string,
+    errors: unknown[],
+  ): Promise<boolean> {
+    try {
+      await withDeadline(operation, label, safetyStepTimeoutMs);
+      return true;
+    } catch {
+      errors.push(new Error(`${label} failed`));
+      return false;
+    }
+  }
+
+  async function withDeadline<T>(
+    operation: () => T | Promise<T>,
+    label: string,
+    timeoutMs: number,
+  ): Promise<T> {
+    let timer: unknown;
+    const timeout = new Promise<never>((_resolve, reject) => {
+      timer = setRuntimeTimeout(() => reject(new Error(`${label} timed out`)), timeoutMs);
+    });
+    try {
+      return await Promise.race([Promise.resolve().then(operation), timeout]);
+    } finally {
+      if (timer !== undefined) clearRuntimeTimeout(timer);
+    }
+  }
+
+  function setRuntimeTimeout(callback: () => void, delayMs: number): unknown {
+    return timers.setTimeout
+      ? timers.setTimeout(callback, delayMs)
+      : setTimeout(callback, delayMs);
+  }
+
+  function clearRuntimeTimeout(timer: unknown): void {
+    if (timers.clearTimeout) {
+      timers.clearTimeout(timer);
+    } else {
+      clearTimeout(timer as ReturnType<typeof setTimeout>);
     }
   }
 
   return runtime;
-}
-
-async function attempt(operation: () => unknown | Promise<unknown>, errors: unknown[]): Promise<boolean> {
-  try {
-    await operation();
-    return true;
-  } catch (error) {
-    errors.push(error);
-    return false;
-  }
 }
 
 function assertLocalMode(config: AppConfig): void {
