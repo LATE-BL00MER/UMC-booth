@@ -91,6 +91,11 @@ type OperationOutcome<T> =
 
 type PreflightOutcome<T> = OperationOutcome<T> | { status: "timeout" | "cancelled" };
 
+interface PreflightOperation<T> {
+  outcome: Promise<OperationOutcome<T>>;
+  reconciliationStarted: boolean;
+}
+
 const defaultTimers: RuntimeTimers = {
   setInterval: (callback, delayMs) => setInterval(() => void callback(), delayMs),
   clearInterval: (timer) => clearInterval(timer as ReturnType<typeof setInterval>),
@@ -376,11 +381,10 @@ export function createRuntime(deps: RuntimeDependencies): EventRuntime {
     operation: () => T | Promise<T>,
     onLateSuccess?: (value: T) => void | Promise<void>,
   ): Promise<T> {
-    let settled = false;
-    const observed = observeOperation(operation).then((outcome) => {
-      settled = true;
-      return outcome;
-    });
+    const preflightOperation: PreflightOperation<T> = {
+      outcome: observeOperation(operation),
+      reconciliationStarted: false,
+    };
     let timer: unknown;
     const timeout = new Promise<PreflightOutcome<T>>((resolve) => {
       timer = setRuntimeTimeout(() => resolve({ status: "timeout" }), startupStepTimeoutMs);
@@ -388,15 +392,28 @@ export function createRuntime(deps: RuntimeDependencies): EventRuntime {
     const cancellation = context.cancelled.then<PreflightOutcome<T>>(() => ({ status: "cancelled" }));
 
     try {
-      const outcome = await Promise.race<PreflightOutcome<T>>([observed, timeout, cancellation]);
+      const outcome = await Promise.race<PreflightOutcome<T>>([
+        preflightOperation.outcome,
+        timeout,
+        cancellation,
+      ]);
       if (outcome.status === "fulfilled") return outcome.value;
-      if ((outcome.status === "timeout" || outcome.status === "cancelled") && !settled) {
-        trackLateOperation(observed, onLateSuccess);
+      if (outcome.status === "timeout" || outcome.status === "cancelled") {
+        reconcilePreflightOperation(preflightOperation, onLateSuccess);
       }
       throw new Error(`${label} failed`);
     } finally {
       if (timer !== undefined) clearRuntimeTimeout(timer);
     }
+  }
+
+  function reconcilePreflightOperation<T>(
+    operation: PreflightOperation<T>,
+    onLateSuccess?: (value: T) => void | Promise<void>,
+  ): void {
+    if (operation.reconciliationStarted) return;
+    operation.reconciliationStarted = true;
+    trackLateOperation(operation.outcome, onLateSuccess);
   }
 
   function observeOperation<T>(operation: () => T | Promise<T>): Promise<OperationOutcome<T>> {
