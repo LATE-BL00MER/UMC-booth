@@ -46,6 +46,7 @@ export class EncryptedDeliveryCoordinator implements DeliveryCoordinator {
 
       let pendingId: string | null = null;
       let keyFragment: string | null = null;
+      let activationAttempted = false;
       try {
         const key = await generatePhotoKey();
         throwIfAborted(input.signal);
@@ -59,6 +60,7 @@ export class EncryptedDeliveryCoordinator implements DeliveryCoordinator {
         throwIfAborted(input.signal);
 
         const id = pendingId;
+        activationAttempted = true;
         const activated = await this.api.activate(id, input.signal);
         pendingId = null;
         const issued: IssuedSession = {
@@ -70,24 +72,30 @@ export class EncryptedDeliveryCoordinator implements DeliveryCoordinator {
         this.registry.add(issued, keyFragment);
         return issued;
       } catch (error) {
-        if (pendingId !== null && keyFragment !== null && (input.signal.aborted || isAbortError(error))) {
-          const activated = await this.api.getActivated(pendingId).catch(() => null);
-          if (activated !== null) {
+        if (pendingId !== null && keyFragment !== null && activationAttempted) {
+          const recovered = await this.api.getActivated(pendingId).then(
+            (activated) => ({ kind: "confirmed" as const, activated }),
+            (recoveryError: unknown) => ({ kind: "unknown" as const, recoveryError }),
+          );
+          if (recovered.kind === "confirmed" && recovered.activated !== null) {
             const issued: IssuedSession = {
               id: pendingId,
-              publicToken: activated.publicToken,
-              deliveryUrl: buildDeliveryUrl(input.publicBaseUrl, activated.publicToken, keyFragment),
-              expiresAt: activated.expiresAt,
+              publicToken: recovered.activated.publicToken,
+              deliveryUrl: buildDeliveryUrl(input.publicBaseUrl, recovered.activated.publicToken, keyFragment),
+              expiresAt: recovered.activated.expiresAt,
             };
             this.registry.add(issued, keyFragment);
             return issued;
+          }
+          if (recovered.kind === "unknown") {
+            throw errorWithCause(error, recovered.recoveryError, "Delivery activation recovery failed");
           }
         }
         if (pendingId !== null) {
           try {
             await this.api.deletePending(pendingId);
           } catch (cleanupError) {
-            throw errorWithCleanupCause(error, cleanupError);
+            throw errorWithCause(error, cleanupError, "Delivery failed and pending cleanup failed");
           }
         }
         if (input.signal.aborted || isAbortError(error)) throw abortError();
@@ -122,13 +130,13 @@ function isAbortError(error: unknown): boolean {
   return error instanceof DOMException && error.name === "AbortError";
 }
 
-function errorWithCleanupCause(primaryError: unknown, cleanupError: unknown): Error {
+function errorWithCause(primaryError: unknown, cause: unknown, fallbackMessage: string): Error {
   if (primaryError instanceof Error) {
-    const error = new Error(primaryError.message, { cause: cleanupError });
+    const error = new Error(primaryError.message, { cause });
     error.name = primaryError.name;
     return error;
   }
-  return new Error("Delivery failed and pending cleanup failed", { cause: cleanupError });
+  return new Error(fallbackMessage, { cause });
 }
 
 function abortError(): DOMException {

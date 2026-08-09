@@ -24,7 +24,8 @@ import type { PrivateApiClient } from "./delivery/private-api-client.js";
 import type { BrowserCompositor } from "./frames/browser-compositor.js";
 import type { FrameManifest } from "./frames/frame-contract.js";
 
-const RESET_COMPLETION_TIMEOUT_MS = 2_500;
+const RESET_PENDING_DELETE_TIMEOUT_MS = 500;
+const RESET_PREFLIGHT_TIMEOUT_MS = 2_000;
 
 export interface RuntimePreflightStatus {
   tunnel: PreflightStatus["tunnel"];
@@ -117,14 +118,17 @@ export function App({ services }: { services: AppServices }) {
 
       const currentState = stateRef.current;
       revokePreviews(currentState);
-      if (currentState.pendingSessionId !== null) {
-        discardPending(services.api, currentState.pendingSessionId);
+      const pendingCleanup = currentState.pendingSessionId === null
+        ? null
+        : startPendingCleanup(services.api, currentState.pendingSessionId);
+      if (pendingCleanup !== null) {
+        await completesBefore(pendingCleanup, RESET_PENDING_DELETE_TIMEOUT_MS);
       }
 
       dispatch({ type: "RESET_CONFIRMED" });
       currentAbortController.current = new AbortController();
       const controller = currentAbortController.current;
-      const completed = await completesBefore(runPreflight(), RESET_COMPLETION_TIMEOUT_MS);
+      const completed = await completesBefore(runPreflight(), RESET_PREFLIGHT_TIMEOUT_MS);
       if (!completed && currentAbortController.current === controller) {
         controller.abort();
         dispatch({ type: "PREFLIGHT_FAILED", generation: stateRef.current.generation, message: "운영 준비 상태를 확인할 수 없습니다" });
@@ -213,7 +217,7 @@ export function App({ services }: { services: AppServices }) {
       const currentState = stateRef.current;
       revokePreviews(currentState);
       if (currentState.pendingSessionId !== null) {
-        discardPending(services.api, currentState.pendingSessionId);
+        startPendingCleanup(services.api, currentState.pendingSessionId);
       }
     };
   }, [runPreflight, services]);
@@ -357,10 +361,15 @@ function completesBefore(promise: Promise<void>, timeoutMs: number): Promise<boo
   });
 }
 
-function discardPending(api: PrivateApiClient, id: string): void {
-  void Promise.resolve()
-    .then(() => api.deletePending(id))
-    .catch(() => undefined);
+function startPendingCleanup(api: PrivateApiClient, id: string): Promise<void> {
+  let deletion: Promise<void>;
+  try {
+    deletion = api.deletePending(id);
+  } catch (error) {
+    deletion = Promise.reject(error);
+  }
+  void deletion.catch(() => undefined);
+  return deletion;
 }
 
 function assertNever(value: never): never {

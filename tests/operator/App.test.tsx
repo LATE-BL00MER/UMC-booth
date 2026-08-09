@@ -306,6 +306,62 @@ describe("App", () => {
     await waitFor(() => expect(issue).toHaveBeenCalledOnce());
   });
 
+  it("starts pending deletion after local teardown and before reset preflight", async () => {
+    const user = userEvent.setup();
+    const services = createFakeServices();
+    const calls: string[] = [];
+    const deletion = deferred<void>();
+    const camera = services.camera as FakeCamera;
+    camera.stop = () => calls.push("camera.stop");
+    camera.probe = async () => {
+      calls.push("camera.probe");
+      return true;
+    };
+    services.preflight = {
+      readStatus: async () => {
+        calls.push("preflight");
+        return runtimeReadyStatus();
+      },
+    };
+    vi.spyOn(URL, "revokeObjectURL").mockImplementation(() => calls.push("preview.revoke"));
+    services.api.deletePending = vi.fn((id) => {
+      calls.push(`delete:${id}`);
+      return deletion.promise;
+    });
+    const delivery = { signal: null as AbortSignal | null };
+    const issue = vi.fn(async (input: Parameters<AppServices["delivery"]["issue"]>[0]) => {
+      delivery.signal = input.signal;
+      input.onPendingSessionCreated?.("pending-before-reset");
+      return new Promise<IssuedSession>(() => undefined);
+    });
+    services.delivery = { issue };
+    render(<App services={services} />);
+
+    await startAndReachFrame(user, services);
+    await user.click(screen.getByRole("button", { name: "이 프레임으로 사진 만들기" }));
+    await waitFor(() => expect(issue).toHaveBeenCalledOnce());
+    calls.length = 0;
+
+    await reset(user);
+
+    expect(delivery.signal?.aborted).toBe(true);
+    expect(calls).toEqual([
+      "camera.stop",
+      "preview.revoke",
+      "preview.revoke",
+      "preview.revoke",
+      "preview.revoke",
+      "preview.revoke",
+      "preview.revoke",
+      "delete:pending-before-reset",
+    ]);
+    expect(screen.getByLabelText("사진 발급")).toBeVisible();
+
+    deletion.resolve();
+    expect(await screen.findByRole("button", { name: "체험 시작" })).toBeVisible();
+    expect(calls.slice(-2)).toEqual(["camera.probe", "preflight"]);
+  });
+
   it("completes reset before three seconds while a known pending cleanup hangs", async () => {
     vi.useFakeTimers();
     const services = createFakeServices();
@@ -340,9 +396,15 @@ describe("App", () => {
     expect(issue).toHaveBeenCalledOnce();
     fireEvent.click(screen.getByRole("button", { name: "처음으로" }));
     fireEvent.click(screen.getByRole("button", { name: "확인" }));
+    expect(screen.getByLabelText("사진 발급")).toBeVisible();
     await act(async () => {
-      await vi.advanceTimersByTimeAsync(2_999);
+      await vi.advanceTimersByTimeAsync(499);
     });
+    expect(screen.getByLabelText("사진 발급")).toBeVisible();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1);
+    });
+    await flushReact();
 
     expect(screen.getByRole("button", { name: "체험 시작" })).toBeVisible();
     expect(deletion).toHaveBeenCalledWith("pending-before-reset");

@@ -15,11 +15,13 @@ class FakePrivateApi implements PrivateApiClient {
   createAttempts = 0;
   failCreateCount = 0;
   failActivateCount = 0;
+  failGetActivatedCount = 0;
   failDeleteCount = 0;
   createdId = "pending-1";
   deletedPendingIds: string[] = [];
   pauseOnActivate = false;
   commitActivationBeforeAbort = false;
+  commitActivationBeforeResponseError = false;
   activated: { publicToken: string; expiresAt: number } | null = null;
 
   async createPending(ciphertext: Uint8Array, signal: AbortSignal): Promise<{ id: string }> {
@@ -45,6 +47,10 @@ class FakePrivateApi implements PrivateApiClient {
         signal.addEventListener("abort", () => reject(abortError()), { once: true });
       });
     }
+    if (this.commitActivationBeforeResponseError) {
+      this.activated = { publicToken: "public-token", expiresAt: 1_800_000_000_000 };
+      throw new Error("activation response lost");
+    }
     if (!this.pauseOnActivate) {
       if (signal.aborted) throw abortError();
       return { publicToken: "public-token", expiresAt: 1_800_000_000_000 };
@@ -65,6 +71,10 @@ class FakePrivateApi implements PrivateApiClient {
 
   async getActivated(id: string): Promise<{ publicToken: string; expiresAt: number } | null> {
     this.calls.push({ operation: "get-activated", id });
+    if (this.failGetActivatedCount > 0) {
+      this.failGetActivatedCount -= 1;
+      throw new Error("activation recovery unavailable");
+    }
     return this.activated;
   }
 }
@@ -139,6 +149,47 @@ describe("EncryptedDeliveryCoordinator", () => {
     expect(registry.activeCount()).toBe(1);
   });
 
+  it("recovers a committed activation after an ordinary response error", async () => {
+    const api = new FakePrivateApi();
+    api.commitActivationBeforeResponseError = true;
+    const registry = new MemoryIssuedSessionRegistry();
+    const coordinator = new EncryptedDeliveryCoordinator(api, registry);
+
+    await expect(coordinator.issue(validIssueInput())).resolves.toMatchObject({
+      id: api.createdId,
+      publicToken: "public-token",
+    });
+    expect(api.calls.map(({ operation }) => operation)).toEqual([
+      "create",
+      "activate",
+      "get-activated",
+    ]);
+    expect(api.deletedPendingIds).toEqual([]);
+    expect(registry.activeCount()).toBe(1);
+  });
+
+  it("keeps an ambiguously activated session intact when recovery cannot be queried", async () => {
+    const api = new FakePrivateApi();
+    api.failActivateCount = 1;
+    api.failGetActivatedCount = 1;
+    const sleeper = new FakeSleeper();
+    const coordinator = new EncryptedDeliveryCoordinator(
+      api,
+      new MemoryIssuedSessionRegistry(),
+      sleeper.sleep,
+    );
+
+    await expect(coordinator.issue(validIssueInput())).rejects.toThrow("temporary activation failure");
+    expect(api.calls.map(({ operation }) => operation)).toEqual([
+      "create",
+      "activate",
+      "get-activated",
+    ]);
+    expect(api.deletedPendingIds).toEqual([]);
+    expect(api.createAttempts).toBe(1);
+    expect(sleeper.delays).toEqual([]);
+  });
+
   it("cleans up a failed activation before starting a retry", async () => {
     const api = new FakePrivateApi();
     api.failActivateCount = 1;
@@ -154,6 +205,7 @@ describe("EncryptedDeliveryCoordinator", () => {
     expect(api.calls.map(({ operation }) => operation)).toEqual([
       "create",
       "activate",
+      "get-activated",
       "delete",
       "create",
       "activate",
