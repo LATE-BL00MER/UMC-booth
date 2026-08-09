@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="1800" viewBox="0 0 1200 1800">
+  <rect width="1200" height="1800" fill="none" stroke="#1f2937" stroke-width="24"/>
+  <g fill="none" stroke="#1f2937" stroke-width="12">
+    <rect x="60" y="120" width="540" height="720"/>
+    <rect x="600" y="120" width="540" height="720"/>
+    <rect x="60" y="960" width="540" height="720"/>
+    <rect x="600" y="960" width="540" height="720"/>
+  </g>
+  <text x="600" y="78" text-anchor="middle" fill="#1f2937" font-family="Arial, sans-serif" font-size="44" font-weight="700" letter-spacing="4">UMC PHOTO BOOTH</text>
+  <text x="600" y="1740" text-anchor="middle" fill="#4b5563" font-family="Arial, sans-serif" font-size="24" letter-spacing="2">MAKE MOMENTS TOGETHER</text>
+</svg>
