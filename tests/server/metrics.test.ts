@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, readdir, rename, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -10,10 +10,12 @@ describe("aggregate metrics persistence", () => {
     const path = join(root, "runtime-data", "metrics.json");
     const time = { value: 1_234 };
     const metrics = new AggregateMetrics({ now: () => time.value, persistencePath: path });
+    await metrics.initialize();
 
-    await metrics.recordPage();
+    metrics.recordPage();
     time.value = 1_235;
-    await metrics.record("save_intent");
+    metrics.record("save_intent");
+    await metrics.drainPersistence();
 
     const persisted: unknown = JSON.parse(await readFile(path, "utf8"));
     expect(persisted).toEqual({
@@ -50,8 +52,10 @@ describe("aggregate metrics persistence", () => {
       },
     };
     const metrics = new AggregateMetrics({ now: () => 200, persistencePath: path, fileSystem });
+    await metrics.initialize();
 
-    await expect(metrics.recordDownload()).rejects.toThrow("rename failed");
+    metrics.recordDownload();
+    await expect(metrics.drainPersistence()).rejects.toThrow("rename failed");
 
     expect(await readFile(path, "utf8")).toBe(previous);
     expect(await readdir(root)).toEqual(["metrics.json"]);
@@ -61,11 +65,13 @@ describe("aggregate metrics persistence", () => {
     const root = await mkdtemp(join(tmpdir(), "umc-metrics-throttle-"));
     const path = join(root, "metrics.json");
     const metrics = new AggregateMetrics({ now: () => 5_000, persistencePath: path });
+    await metrics.initialize();
 
     for (let count = 0; count < 10; count += 1) {
-      await expect(metrics.record("decrypt_success")).resolves.toBe(true);
+      expect(metrics.record("decrypt_success")).toBe(true);
     }
-    await expect(metrics.record("decrypt_success")).resolves.toBe(false);
+    expect(metrics.record("decrypt_success")).toBe(false);
+    await metrics.drainPersistence();
 
     expect(JSON.parse(await readFile(path, "utf8"))).toMatchObject({ decryptSuccess: 10 });
   });
@@ -84,7 +90,8 @@ describe("aggregate metrics persistence", () => {
     const metrics = new AggregateMetrics({ now: () => 200, persistencePath: path });
 
     await metrics.initialize();
-    await metrics.record("join_click");
+    metrics.record("join_click");
+    await metrics.drainPersistence();
 
     expect(metrics.snapshot()).toEqual({ pages: 7, downloads: 6, decryptSuccess: 5, saveIntent: 4, joinClick: 4 });
     expect(JSON.parse(await readFile(path, "utf8"))).toEqual({
@@ -114,4 +121,50 @@ describe("aggregate metrics persistence", () => {
     await expect(metrics.initialize()).rejects.toThrow("Invalid aggregate metrics");
     expect(metrics.snapshot()).toEqual({ pages: 0, downloads: 0, decryptSuccess: 0, saveIntent: 0, joinClick: 0 });
   });
+
+  it("coalesces accepted counters behind one bounded persistence pump while a write stalls", async () => {
+    const root = await mkdtemp(join(tmpdir(), "umc-metrics-coalesce-"));
+    const path = join(root, "metrics.json");
+    const writeStarted = deferred<void>();
+    const releaseFirstWrite = deferred<void>();
+    let writeCalls = 0;
+    const fileSystem: MetricsFileSystem = {
+      mkdir,
+      readFile,
+      rename,
+      rm,
+      writeFile: (async (...args: Parameters<typeof writeFile>) => {
+        writeCalls += 1;
+        if (writeCalls === 1) {
+          writeStarted.resolve();
+          await releaseFirstWrite.promise;
+        }
+        return writeFile(...args);
+      }) as typeof writeFile,
+    };
+    const metrics = new AggregateMetrics({ persistencePath: path, fileSystem });
+    await metrics.initialize();
+
+    for (let count = 0; count < 1_000; count += 1) metrics.recordPage();
+    await writeStarted.promise;
+
+    expect(metrics.persistenceStatus()).toEqual({ dirty: true, inFlight: true });
+    expect(writeCalls).toBe(1);
+    releaseFirstWrite.resolve();
+    await metrics.drainPersistence();
+
+    expect(writeCalls).toBeLessThanOrEqual(2);
+    expect(JSON.parse(await readFile(path, "utf8"))).toMatchObject({ pages: 1_000 });
+    expect(metrics.persistenceStatus()).toEqual({ dirty: false, inFlight: false });
+  });
 });
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise;
+    reject = rejectPromise;
+  });
+  return { promise, resolve, reject };
+}

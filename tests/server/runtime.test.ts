@@ -1,8 +1,9 @@
-import { mkdtemp, readdir } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, readdir, rename, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import type { AppConfig } from "../../src/shared/config";
+import { AggregateMetrics, type MetricsFileSystem } from "../../src/server/metrics";
 import { createRuntime, type RuntimeDependencies, type RuntimeServer, type RuntimeTimers } from "../../src/server/runtime";
 import { FileSessionStore } from "../../src/server/session-store";
 import type { RuntimeStatusProvider } from "../../src/server/types";
@@ -350,6 +351,72 @@ describe("event runtime", () => {
     await runtime.requestShutdown();
     expect(privateCloseCalls).toBe(2);
     expect(exit).toHaveBeenLastCalledWith(0);
+  });
+
+  it("waits for accepted aggregate counters before requestShutdown exits zero", async () => {
+    const root = await mkdtemp(join(tmpdir(), "umc-runtime-metrics-drain-"));
+    const path = join(root, "metrics.json");
+    const writeStarted = deferred<void>();
+    const releaseWrite = deferred<void>();
+    const fileSystem: MetricsFileSystem = {
+      mkdir,
+      readFile,
+      rename,
+      rm,
+      writeFile: (async (...args: Parameters<typeof writeFile>) => {
+        writeStarted.resolve();
+        await releaseWrite.promise;
+        return writeFile(...args);
+      }) as typeof writeFile,
+    };
+    const metrics = new AggregateMetrics({ persistencePath: path, fileSystem, drainTimeoutMs: 1_000 });
+    await metrics.initialize();
+    const exit = vi.fn();
+    const harness = createHarness({ metrics, exit });
+    const runtime = createRuntime(harness.dependencies);
+    await runtime.start();
+    metrics.recordPage();
+    await writeStarted.promise;
+
+    const shutdown = runtime.requestShutdown();
+    await Promise.resolve();
+    expect(exit).not.toHaveBeenCalled();
+    releaseWrite.resolve();
+    await shutdown;
+
+    expect(exit).toHaveBeenCalledWith(0);
+    expect(JSON.parse(await readFile(path, "utf8"))).toMatchObject({ pages: 1 });
+  });
+
+  it("exits nonzero when accepted aggregate counters cannot drain within the bound", async () => {
+    const root = await mkdtemp(join(tmpdir(), "umc-runtime-metrics-timeout-"));
+    const writeStarted = deferred<void>();
+    const fileSystem: MetricsFileSystem = {
+      mkdir,
+      readFile,
+      rename,
+      rm,
+      writeFile: (() => {
+        writeStarted.resolve();
+        return new Promise<void>(() => undefined);
+      }) as typeof writeFile,
+    };
+    const metrics = new AggregateMetrics({
+      persistencePath: join(root, "metrics.json"),
+      fileSystem,
+      drainTimeoutMs: 10,
+    });
+    await metrics.initialize();
+    const exit = vi.fn();
+    const harness = createHarness({ metrics, exit });
+    const runtime = createRuntime(harness.dependencies);
+    await runtime.start();
+    metrics.recordDownload();
+    await writeStarted.promise;
+
+    await runtime.requestShutdown();
+
+    expect(exit).toHaveBeenCalledWith(1);
   });
 
   it("serializes scheduled sweeps so an older failure cannot overwrite a newer success", async () => {

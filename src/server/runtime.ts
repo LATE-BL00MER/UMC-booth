@@ -33,12 +33,17 @@ export interface RuntimeSignals {
   off(signal: NodeJS.Signals, listener: () => void): void;
 }
 
+export interface RuntimeMetrics {
+  drainPersistence(): Promise<void>;
+}
+
 export interface RuntimeDependencies {
   config: AppConfig;
   store: RuntimeStore;
   createPublicServer(): RuntimeServer;
   createPrivateServer(runtimeStatus: RuntimeStatusProvider): RuntimeServer;
   tunnel?: RuntimeTunnel;
+  metrics?: RuntimeMetrics;
   timers?: RuntimeTimers;
   signals?: RuntimeSignals;
   exit?: (code: number) => void;
@@ -164,6 +169,9 @@ export function createRuntime(deps: RuntimeDependencies): EventRuntime {
         if (await attempt(() => server.close(), errors)) {
           publicServer = null;
         }
+      }
+      if (deps.metrics) {
+        await attempt(() => deps.metrics!.drainPersistence(), errors);
       }
       if (errors.length > 0) {
         throw new AggregateError(errors, "Runtime shutdown was incomplete");

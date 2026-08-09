@@ -37,6 +37,7 @@ async function main(): Promise<void> {
       operatorBuildDir,
     }),
     tunnel: new TunnelSupervisor(),
+    metrics,
   });
 
   await runtime.start();

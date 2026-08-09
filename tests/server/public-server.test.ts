@@ -133,6 +133,7 @@ describe("public server", () => {
         rename: async () => { throw new Error("disk unavailable"); },
       },
     });
+    await metrics.initialize();
     const app = buildPublicServer({ store, recipientHtml: "<!doctype html><title>Download</title>", metrics });
     apps.push(app);
     await app.ready();

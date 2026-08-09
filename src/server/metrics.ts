@@ -16,6 +16,8 @@ export interface AggregateMetricsOptions {
   now?: () => number;
   persistencePath?: string;
   fileSystem?: MetricsFileSystem;
+  drainTimeoutMs?: number;
+  timers?: MetricsTimers;
 }
 
 export interface MetricsFileSystem {
@@ -26,7 +28,17 @@ export interface MetricsFileSystem {
   writeFile: typeof writeFile;
 }
 
+export interface MetricsTimers {
+  setTimeout(callback: () => void, delayMs: number): unknown;
+  clearTimeout(timer: unknown): void;
+}
+
 const nodeFileSystem: MetricsFileSystem = { mkdir, readFile, rename, rm, writeFile };
+const defaultTimers: MetricsTimers = {
+  setTimeout: (callback, delayMs) => setTimeout(callback, delayMs),
+  clearTimeout: (timer) => clearTimeout(timer as ReturnType<typeof setTimeout>),
+};
+const DEFAULT_DRAIN_TIMEOUT_MS = 5_000;
 
 const emptySnapshot = (): AggregateMetricsSnapshot => ({
   pages: 0,
@@ -40,25 +52,36 @@ export class AggregateMetrics {
   private readonly now: () => number;
   private readonly persistencePath: string | null;
   private readonly fileSystem: MetricsFileSystem;
+  private readonly drainTimeoutMs: number;
+  private readonly timers: MetricsTimers;
   private readonly counters = emptySnapshot();
   private eventSecond: number | null = null;
   private acceptedEvents = 0;
   private loadPromise: Promise<void> | null = null;
-  private pendingPersistence: Promise<void> = Promise.resolve();
+  private initialized = false;
+  private revision = 0;
+  private persistedRevision = 0;
+  private persistencePump: Promise<void> | null = null;
+  private persistenceError: unknown = null;
 
   constructor(options: AggregateMetricsOptions = {}) {
     this.now = options.now ?? Date.now;
     this.persistencePath = options.persistencePath ?? null;
     this.fileSystem = options.fileSystem ?? nodeFileSystem;
+    this.drainTimeoutMs = options.drainTimeoutMs ?? DEFAULT_DRAIN_TIMEOUT_MS;
+    this.timers = options.timers ?? defaultTimers;
+    this.initialized = this.persistencePath === null;
   }
 
   initialize(): Promise<void> {
-    this.loadPromise ??= this.loadPersisted();
+    this.loadPromise ??= this.loadPersisted().then(() => {
+      this.initialized = true;
+    });
     return this.loadPromise;
   }
 
-  async record(event: AggregateEvent): Promise<boolean> {
-    await this.initialize();
+  record(event: AggregateEvent): boolean {
+    this.assertInitialized();
     const second = Math.floor(this.now() / 1_000);
     if (second !== this.eventSecond) {
       this.eventSecond = second;
@@ -75,34 +98,92 @@ export class AggregateMetrics {
     } else {
       this.counters.joinClick += 1;
     }
-    await this.persist();
+    this.markDirty();
     return true;
   }
 
-  async recordPage(): Promise<void> {
-    await this.initialize();
+  recordPage(): void {
+    this.assertInitialized();
     this.counters.pages += 1;
-    await this.persist();
+    this.markDirty();
   }
 
-  async recordDownload(): Promise<void> {
-    await this.initialize();
+  recordDownload(): void {
+    this.assertInitialized();
     this.counters.downloads += 1;
-    await this.persist();
+    this.markDirty();
   }
 
   snapshot(): AggregateMetricsSnapshot {
     return { ...this.counters };
   }
 
-  private persist(): Promise<void> {
-    if (this.persistencePath === null) return Promise.resolve();
-    const snapshot = { ...this.counters, updatedAt: this.now() };
-    const write = this.pendingPersistence
-      .catch(() => undefined)
-      .then(() => this.writeAtomically(JSON.stringify(snapshot)));
-    this.pendingPersistence = write;
-    return write;
+  persistenceStatus(): { dirty: boolean; inFlight: boolean } {
+    return {
+      dirty: this.revision > this.persistedRevision,
+      inFlight: this.persistencePump !== null,
+    };
+  }
+
+  async drainPersistence(): Promise<void> {
+    this.assertInitialized();
+    if (this.persistencePath === null || this.revision === this.persistedRevision) return;
+    await this.withDrainTimeout(this.drainUntilClean());
+  }
+
+  private markDirty(): void {
+    this.revision += 1;
+    if (this.persistencePath === null) {
+      this.persistedRevision = this.revision;
+      return;
+    }
+    this.ensurePump();
+  }
+
+  private ensurePump(): Promise<void> {
+    if (this.persistencePump !== null) return this.persistencePump;
+    this.persistenceError = null;
+    const pump = this.runPersistencePump();
+    this.persistencePump = pump;
+    void pump.catch((error: unknown) => {
+      this.persistenceError = error;
+    }).finally(() => {
+      if (this.persistencePump !== pump) return;
+      this.persistencePump = null;
+      if (this.persistenceError === null && this.revision > this.persistedRevision) {
+        this.ensurePump();
+      }
+    });
+    return pump;
+  }
+
+  private async runPersistencePump(): Promise<void> {
+    while (this.persistedRevision < this.revision) {
+      const targetRevision = this.revision;
+      const snapshot = { ...this.counters, updatedAt: this.now() };
+      await this.writeAtomically(JSON.stringify(snapshot));
+      this.persistedRevision = targetRevision;
+    }
+  }
+
+  private async drainUntilClean(): Promise<void> {
+    while (this.persistedRevision < this.revision) {
+      const pump = this.persistencePump ?? this.ensurePump();
+      await pump;
+    }
+    if (this.persistenceError !== null) throw this.persistenceError;
+  }
+
+  private async withDrainTimeout(operation: Promise<void>): Promise<void> {
+    let timer: unknown;
+    const timeout = new Promise<never>((_resolve, reject) => {
+      timer = this.timers.setTimeout(() => reject(new Error("Metrics persistence drain timed out")), this.drainTimeoutMs);
+    });
+    try {
+      await Promise.race([operation, timeout]);
+    } finally {
+      if (timer !== undefined) this.timers.clearTimeout(timer);
+    }
   }
 
   private async loadPersisted(): Promise<void> {
@@ -137,6 +218,10 @@ export class AggregateMetrics {
       await this.fileSystem.rm(temporary, { force: true });
       throw error;
     }
+  }
+
+  private assertInitialized(): void {
+    if (!this.initialized) throw new Error("Aggregate metrics are not initialized");
   }
 }
 
