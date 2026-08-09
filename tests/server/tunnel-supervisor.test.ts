@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import {
   parseQuickTunnelUrl,
@@ -123,6 +123,25 @@ describe("parseQuickTunnelUrl", () => {
     expect(parseQuickTunnelUrl("http://unsafe.example.test")).toBeNull();
     expect(parseQuickTunnelUrl("https://calm-river.trycloudflare.com.attacker.test")).toBeNull();
   });
+
+  it("accepts only bare HTTPS URL tokens and looks past unsafe candidates", () => {
+    for (const unsafeCandidate of [
+      "https://calm-river.trycloudflare.com/health",
+      "https://calm-river.trycloudflare.com:443",
+      "https://user@calm-river.trycloudflare.com",
+      "https://calm-river.trycloudflare.com?token=secret",
+      "https://calm-river.trycloudflare.com#fragment",
+      "http://calm-river.trycloudflare.com",
+      "https://calm-river.trycloudflare.com.attacker.test",
+      "javascript:https://calm-river.trycloudflare.com",
+    ]) {
+      expect(parseQuickTunnelUrl(unsafeCandidate)).toBeNull();
+    }
+
+    expect(parseQuickTunnelUrl(
+      "https://unsafe.trycloudflare.com/path then https://calm-river.trycloudflare.com",
+    )).toBe("https://calm-river.trycloudflare.com");
+  });
 });
 
 describe("TunnelSupervisor", () => {
@@ -177,7 +196,7 @@ describe("TunnelSupervisor", () => {
     expect(harness.timers.delays).toContain(5_000);
   });
 
-  it("does not busy-loop when cloudflared is missing", () => {
+  it("rejects startup once and does not busy-loop when cloudflared is missing", async () => {
     const timers = new TestTimers();
     const missingBinary = Object.assign(new Error("missing"), { code: "ENOENT" });
     const supervisor = new TunnelSupervisor({
@@ -188,7 +207,12 @@ describe("TunnelSupervisor", () => {
       timers,
     });
 
-    void supervisor.start("http://127.0.0.1:4174");
+    const start = supervisor.start("http://127.0.0.1:4174");
+    const settled = vi.fn();
+    void start.then(settled, settled);
+
+    await expect(start).rejects.toMatchObject({ code: "missing-binary" });
+    await Promise.resolve();
 
     expect(supervisor.status()).toEqual({
       state: "down",
@@ -197,14 +221,38 @@ describe("TunnelSupervisor", () => {
       error: "missing-binary",
     });
     expect(timers.delays).toEqual([]);
+    expect(settled).toHaveBeenCalledExactlyOnceWith(expect.any(Error));
+
+    supervisor.stop();
+    expect(settled).toHaveBeenCalledOnce();
   });
 
-  it("stops idempotently and ignores stale child output", async () => {
+  it("continues notifying listeners and settles startup when a URL listener throws", async () => {
     const harness = createHarness();
-    void harness.supervisor.start("http://127.0.0.1:4174");
+    const throwingListener = vi.fn(() => {
+      throw new Error("listener failure");
+    });
+    const laterListener = vi.fn();
+    harness.supervisor.onUrlChange(throwingListener);
+    harness.supervisor.onUrlChange(laterListener);
+
+    const start = harness.supervisor.start("http://127.0.0.1:4174");
+    harness.children[0]!.emitLine("https://calm-river.trycloudflare.com");
+    harness.health.resolve(new Response("ok"));
+    await expect(start).resolves.toBeUndefined();
+
+    expect(throwingListener).toHaveBeenCalledExactlyOnceWith("https://calm-river.trycloudflare.com");
+    expect(laterListener).toHaveBeenCalledExactlyOnceWith("https://calm-river.trycloudflare.com");
+    expect(harness.supervisor.status()).toMatchObject({ state: "healthy" });
+  });
+
+  it("stops idempotently, settles startup once, and ignores stale child output", async () => {
+    const harness = createHarness();
+    const start = harness.supervisor.start("http://127.0.0.1:4174");
     const staleChild = harness.children[0]!;
     harness.supervisor.stop();
     harness.supervisor.stop();
+    await expect(start).resolves.toBeUndefined();
     staleChild.emitLine("https://calm-river.trycloudflare.com");
     staleChild.exit();
     await Promise.resolve();

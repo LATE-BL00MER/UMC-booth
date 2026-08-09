@@ -31,6 +31,15 @@ export interface TunnelSupervisorDependencies {
   timers?: TimerAdapter;
 }
 
+export class TunnelStartError extends Error {
+  readonly code = "missing-binary";
+
+  constructor() {
+    super("cloudflared is not installed");
+    this.name = "TunnelStartError";
+  }
+}
+
 const HEALTH_TIMEOUT_MS = 5_000;
 const RESTART_DELAYS_MS = [1_000, 2_000, 5_000] as const;
 
@@ -45,7 +54,7 @@ export class TunnelSupervisor {
   private readonly fetch: (url: string, init?: RequestInit) => Promise<Response>;
   private readonly timers: TimerAdapter;
   private readonly urlListeners = new Set<(url: string) => void>();
-  private readonly startResolvers = new Map<number, () => void>();
+  private readonly startSettlers = new Map<number, { resolve: () => void; reject: (error: Error) => void }>();
   private activeRun = 0;
   private child: TunnelChild | null = null;
   private healthAbortController: AbortController | null = null;
@@ -70,7 +79,7 @@ export class TunnelSupervisor {
     this.restartAttempt = 0;
     this.statusValue = startingStatus();
 
-    const started = new Promise<void>((resolve) => this.startResolvers.set(run, resolve));
+    const started = new Promise<void>((resolve, reject) => this.startSettlers.set(run, { resolve, reject }));
     this.launch(run);
     return started;
   }
@@ -87,8 +96,8 @@ export class TunnelSupervisor {
     this.child = null;
     child?.kill();
     this.statusValue = downStatus(null);
-    for (const resolve of this.startResolvers.values()) resolve();
-    this.startResolvers.clear();
+    for (const { resolve } of this.startSettlers.values()) resolve();
+    this.startSettlers.clear();
   }
 
   status(): TunnelStatus {
@@ -173,10 +182,14 @@ export class TunnelSupervisor {
         latencyMs: this.timers.now() - startedAt,
         error: null,
       };
-      for (const listener of this.urlListeners) listener(publicUrl);
-      const resolve = this.startResolvers.get(run);
-      if (resolve) resolve();
-      this.startResolvers.delete(run);
+      for (const listener of this.urlListeners) {
+        try {
+          listener(publicUrl);
+        } catch {
+          // A consumer's reissue failure must not prevent later consumers or startup from completing.
+        }
+      }
+      this.resolveStart(run);
     } catch {
       if (this.isCurrentChild(run, child) && this.healthAbortController === controller) {
         this.healthAbortController = null;
@@ -204,6 +217,7 @@ export class TunnelSupervisor {
     this.healthAbortController = null;
     this.child = null;
     this.statusValue = downStatus("missing-binary");
+    this.rejectStart(run, new TunnelStartError());
   }
 
   private scheduleRestart(run: number): void {
@@ -229,10 +243,25 @@ export class TunnelSupervisor {
   private isCurrentChild(run: number, child: TunnelChild): boolean {
     return this.isCurrent(run) && this.child === child;
   }
+
+  private resolveStart(run: number): void {
+    const settler = this.startSettlers.get(run);
+    if (!settler) return;
+    this.startSettlers.delete(run);
+    settler.resolve();
+  }
+
+  private rejectStart(run: number, error: Error): void {
+    const settler = this.startSettlers.get(run);
+    if (!settler) return;
+    this.startSettlers.delete(run);
+    settler.reject(error);
+  }
 }
 
 export function parseQuickTunnelUrl(line: string): string | null {
-  const match = /https:\/\/([a-z0-9](?:[a-z0-9-]*[a-z0-9])?)\.trycloudflare\.com(?=$|[\s/,:;\])}>"'])/i.exec(line);
+  const token = /(?:^|[\s([{"'])https:\/\/([a-z0-9](?:[a-z0-9-]*[a-z0-9])?)\.trycloudflare\.com(?=$|[\s)\]}"',;!])/gi;
+  const match = token.exec(line);
   return match ? `https://${match[1]?.toLowerCase()}.trycloudflare.com` : null;
 }
 
