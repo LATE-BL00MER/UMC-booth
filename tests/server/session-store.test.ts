@@ -127,18 +127,60 @@ describe("FileSessionStore", () => {
     expect(await readdir(root)).toEqual([]);
   });
 
-  it("linearizes reset deletion behind a committed activation without losing ciphertext", async () => {
-    const { store } = await createStore();
+  it("atomically resolves an activation already in flight without deleting its ciphertext", async () => {
+    const root = await mkdtemp(join(tmpdir(), "umc-store-resolve-race-"));
+    const activationWriteStarted = deferred<void>();
+    const allowActivationWrite = deferred<void>();
+    let activeMetadataWrite = false;
+    let pendingId = "";
+    const fileSystem: SessionStoreFileSystem = {
+      mkdir,
+      readdir,
+      rename,
+      rm,
+      stat,
+      readFile,
+      writeFile: ((...args: Parameters<typeof writeFile>) => {
+        if (activeMetadataWrite && String(args[0]).startsWith(join(root, `${pendingId}.json.`))) {
+          activationWriteStarted.resolve();
+          return allowActivationWrite.promise.then(() => writeFile(...args));
+        }
+        return writeFile(...args);
+      }) as typeof writeFile,
+    };
+    const store = new FileSessionStore({
+      root,
+      clock: { now: () => 1_000 },
+      activeTtlMs: 600_000,
+      pendingTtlMs: 120_000,
+      fileSystem,
+    });
+    await store.initialize();
+    const pending = await store.createPending(new Uint8Array([7, 8, 9]));
+    pendingId = pending.id;
+    activeMetadataWrite = true;
+
+    try {
+      const activating = store.activate(pending.id);
+      await activationWriteStarted.promise;
+      const resolving = store.resolveActivationOrDelete(pending.id);
+      await expect(settlesWithin(resolving, 20)).rejects.toThrow("Timed out waiting for sweep read");
+      allowActivationWrite.resolve();
+
+      const [activated, resolved] = await Promise.all([activating, resolving]);
+      expect(resolved).toEqual({ status: "active", publicToken: activated.publicToken, expiresAt: 601_000 });
+      await expect(store.readActive(activated.publicToken)).resolves.toMatchObject({ kind: "active", bytes: new Uint8Array([7, 8, 9]) });
+    } finally {
+      allowActivationWrite.resolve();
+    }
+  });
+
+  it("deletes a still-pending session when atomic resolution finds no activation", async () => {
+    const { root, store } = await createStore();
     const pending = await store.createPending(new Uint8Array([7, 8, 9]));
 
-    const [activated, deleted] = await Promise.all([
-      store.activate(pending.id),
-      store.deletePending(pending.id),
-    ]);
-
-    expect(deleted).toBe(false);
-    expect((await store.readActive(activated.publicToken)).kind).toBe("active");
-    await expect(store.getActivated(pending.id)).resolves.toEqual(activated);
+    await expect(store.resolveActivationOrDelete(pending.id)).resolves.toEqual({ status: "deleted" });
+    expect(await readdir(root)).toEqual([]);
   });
 
   it("does not recover an active session when its ciphertext is missing", async () => {

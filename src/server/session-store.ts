@@ -9,6 +9,10 @@ export type SessionLookup =
   | { kind: "gone" }
   | { kind: "not-found" };
 
+export type ActivationResolution =
+  | { status: "active"; publicToken: string; expiresAt: number }
+  | { status: "deleted" };
+
 export interface SessionStats {
   pending: number;
   active: number;
@@ -181,6 +185,39 @@ export class FileSessionStore {
         expiresAt: record.expiresAt,
         publicToken: formatPublicToken({ id, expiresAt: record.expiresAt }),
       };
+    });
+  }
+
+  /**
+   * Serializes ambiguous activation recovery with activation, deletion, and
+   * sweeping. A pending or otherwise unreadable session is removed before this
+   * method reports deletion, while a valid active session is never deleted.
+   */
+  async resolveActivationOrDelete(id: string): Promise<ActivationResolution> {
+    if (!this.isSessionId(id)) {
+      return { status: "deleted" };
+    }
+    return this.withSessionLock(id, async () => {
+      const record = await this.readRecord(id);
+      const now = this.clock.now();
+      if (record?.status === "active" && record.expiresAt !== null && record.expiresAt > now) {
+        try {
+          await this.fileSystem.stat(this.binPath(id));
+          return {
+            status: "active",
+            expiresAt: record.expiresAt,
+            publicToken: formatPublicToken({ id, expiresAt: record.expiresAt }),
+          };
+        } catch (error) {
+          if (!isNotFound(error)) {
+            throw error;
+          }
+        }
+      }
+      if (record) {
+        await this.deleteSession(id);
+      }
+      return { status: "deleted" };
     });
   }
 

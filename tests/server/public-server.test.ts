@@ -47,6 +47,7 @@ describe("public server", () => {
     });
 
     expect(response.statusCode).toBe(404);
+    expect((await context.app.inject({ method: "POST", url: "/api/sessions/private-id/resolve" })).statusCode).toBe(404);
   });
 
   it("marks public health responses as non-cacheable", async () => {

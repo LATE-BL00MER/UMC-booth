@@ -135,17 +135,30 @@ describe("private server", () => {
     expect(activated.body).not.toContain("http");
   });
 
-  it("returns activation recovery details only after the private session is active", async () => {
+  it("atomically resolves or deletes only on the private listener with a fixed response", async () => {
+    const context = await createPrivateApp();
+    apps.push(context.app);
+    const pending = await context.store.createPending(new Uint8Array([1]));
+
+    const deleted = await context.app.inject({ method: "POST", url: `/api/sessions/${pending.id}/resolve` });
+    expect(deleted.statusCode).toBe(200);
+    expect(deleted.json()).toEqual({ status: "deleted" });
+    expect(deleted.body).not.toContain(pending.id);
+
+    const activePending = await context.store.createPending(new Uint8Array([2]));
+    const active = await context.store.activate(activePending.id);
+    const resolved = await context.app.inject({ method: "POST", url: `/api/sessions/${activePending.id}/resolve` });
+
+    expect(resolved.statusCode).toBe(200);
+    expect(resolved.json()).toEqual({ status: "active", publicToken: active.publicToken, expiresAt: active.expiresAt });
+  });
+
+  it("does not retain the replaced activation lookup endpoint", async () => {
     const context = await createPrivateApp();
     apps.push(context.app);
     const pending = await context.store.createPending(new Uint8Array([1]));
 
     expect((await context.app.inject({ method: "GET", url: `/api/sessions/${pending.id}/activation` })).statusCode).toBe(404);
-    const active = await context.store.activate(pending.id);
-    const recovered = await context.app.inject({ method: "GET", url: `/api/sessions/${pending.id}/activation` });
-
-    expect(recovered.statusCode).toBe(200);
-    expect(recovered.json()).toEqual(active);
   });
 
   it("deletes pending sessions idempotently and refuses active session deletion", async () => {

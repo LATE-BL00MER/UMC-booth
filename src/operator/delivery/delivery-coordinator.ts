@@ -32,7 +32,7 @@ interface PendingActivationRecovery {
 
 type RecoveryResult =
   | { kind: "active"; issued: IssuedSession }
-  | { kind: "inactive" }
+  | { kind: "deleted" }
   | { kind: "expired" }
   | { kind: "unavailable"; error: unknown };
 
@@ -73,7 +73,8 @@ export class EncryptedDeliveryCoordinator implements DeliveryCoordinator {
       if (recovery.kind === "expired") {
         throw localRecoveryExpiryError(retained.activationError);
       }
-      await this.deleteRetainedPending(retained);
+      // The atomic resolver already removed the pending session before it
+      // returned this result, so it is safe to create a replacement.
     }
 
     throwIfAborted(input.signal);
@@ -131,6 +132,9 @@ export class EncryptedDeliveryCoordinator implements DeliveryCoordinator {
           if (recovered.kind === "expired") {
             throw localRecoveryExpiryError(error);
           }
+          if (recovered.kind === "deleted") {
+            pendingId = null;
+          }
         }
         if (pendingId !== null) {
           try {
@@ -160,9 +164,6 @@ export class EncryptedDeliveryCoordinator implements DeliveryCoordinator {
     const recovery = await this.recoverActivation(generation, retained);
     if (recovery.kind === "active") {
       return recovery.issued;
-    }
-    if (recovery.kind === "inactive") {
-      await this.deleteRetainedPending(retained);
     }
     return null;
   }
@@ -199,20 +200,20 @@ export class EncryptedDeliveryCoordinator implements DeliveryCoordinator {
           this.clearRecovery(generation, recovery);
           return { kind: "expired" };
         }
-        const activated = await this.api.getActivated(recovery.id);
+        const resolution = await this.api.resolveActivationOrDelete(recovery.id);
         if (recovery.expiresAt <= this.now()) {
           this.clearRecovery(generation, recovery);
           return { kind: "expired" };
         }
-        if (activated === null) {
+        if (resolution.status === "deleted") {
           this.clearRecovery(generation, recovery);
-          return { kind: "inactive" };
+          return { kind: "deleted" };
         }
         const issued: IssuedSession = {
           id: recovery.id,
-          publicToken: activated.publicToken,
-          deliveryUrl: buildDeliveryUrl(recovery.publicBaseUrl, activated.publicToken, recovery.keyFragment),
-          expiresAt: activated.expiresAt,
+          publicToken: resolution.publicToken,
+          deliveryUrl: buildDeliveryUrl(recovery.publicBaseUrl, resolution.publicToken, recovery.keyFragment),
+          expiresAt: resolution.expiresAt,
         };
         this.registry.add(issued, recovery.keyFragment);
         this.clearRecovery(generation, recovery);
@@ -228,14 +229,6 @@ export class EncryptedDeliveryCoordinator implements DeliveryCoordinator {
   private clearRecovery(generation: number, recovery: PendingActivationRecovery): void {
     if (this.pendingRecoveries.get(generation) === recovery) {
       this.pendingRecoveries.delete(generation);
-    }
-  }
-
-  private async deleteRetainedPending(recovery: PendingActivationRecovery): Promise<void> {
-    try {
-      await this.api.deletePending(recovery.id);
-    } catch (cleanupError) {
-      throw errorWithCause(recovery.activationError, cleanupError, "Delivery failed and pending cleanup failed");
     }
   }
 }

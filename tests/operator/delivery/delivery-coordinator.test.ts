@@ -15,7 +15,7 @@ class FakePrivateApi implements PrivateApiClient {
   createAttempts = 0;
   failCreateCount = 0;
   failActivateCount = 0;
-  failGetActivatedCount = 0;
+  failResolveCount = 0;
   failDeleteCount = 0;
   createdId = "pending-1";
   deletedPendingIds: string[] = [];
@@ -69,13 +69,20 @@ class FakePrivateApi implements PrivateApiClient {
     }
   }
 
-  async getActivated(id: string): Promise<{ publicToken: string; expiresAt: number } | null> {
-    this.calls.push({ operation: "get-activated", id });
-    if (this.failGetActivatedCount > 0) {
-      this.failGetActivatedCount -= 1;
+  async resolveActivationOrDelete(id: string): Promise<
+    | { status: "active"; publicToken: string; expiresAt: number }
+    | { status: "deleted" }
+  > {
+    this.calls.push({ operation: "resolve", id });
+    if (this.failResolveCount > 0) {
+      this.failResolveCount -= 1;
       throw new Error("activation recovery unavailable");
     }
-    return this.activated;
+    if (this.activated === null) {
+      this.deletedPendingIds.push(id);
+      return { status: "deleted" };
+    }
+    return { status: "active", ...this.activated };
   }
 }
 
@@ -132,7 +139,7 @@ describe("EncryptedDeliveryCoordinator", () => {
     expect(api.deletedPendingIds).toEqual([api.createdId]);
   });
 
-  it("registers the issued session when activation commits before its response is aborted", async () => {
+  it("keeps a key registered when activation commits while atomic resolution waits behind it", async () => {
     const api = new FakePrivateApi();
     api.commitActivationBeforeAbort = true;
     const registry = new MemoryIssuedSessionRegistry();
@@ -144,7 +151,7 @@ describe("EncryptedDeliveryCoordinator", () => {
     controller.abort();
 
     await expect(issuing).resolves.toMatchObject({ id: api.createdId, publicToken: "public-token" });
-    expect(api.calls).toContainEqual({ operation: "get-activated", id: api.createdId });
+    expect(api.calls).toContainEqual({ operation: "resolve", id: api.createdId });
     expect(api.deletedPendingIds).toEqual([]);
     expect(registry.activeCount()).toBe(1);
   });
@@ -162,7 +169,7 @@ describe("EncryptedDeliveryCoordinator", () => {
     expect(api.calls.map(({ operation }) => operation)).toEqual([
       "create",
       "activate",
-      "get-activated",
+      "resolve",
     ]);
     expect(api.deletedPendingIds).toEqual([]);
     expect(registry.activeCount()).toBe(1);
@@ -171,7 +178,7 @@ describe("EncryptedDeliveryCoordinator", () => {
   it.each([1, 2])("recovers a committed activation after %i transient recovery transport failures", async (failures) => {
     const api = new FakePrivateApi();
     api.commitActivationBeforeResponseError = true;
-    api.failGetActivatedCount = failures;
+    api.failResolveCount = failures;
     const sleeper = new FakeSleeper();
     const registry = new MemoryIssuedSessionRegistry();
     const coordinator = new EncryptedDeliveryCoordinator(
@@ -181,7 +188,7 @@ describe("EncryptedDeliveryCoordinator", () => {
     );
 
     await expect(coordinator.issue(validIssueInput())).resolves.toMatchObject({ id: api.createdId });
-    expect(api.calls.filter(({ operation }) => operation === "get-activated")).toHaveLength(failures + 1);
+    expect(api.calls.filter(({ operation }) => operation === "resolve")).toHaveLength(failures + 1);
     expect(api.deletedPendingIds).toEqual([]);
     expect(api.createAttempts).toBe(1);
     expect(sleeper.delays).toEqual(failures === 1 ? [1_000] : [1_000, 2_000]);
@@ -191,7 +198,7 @@ describe("EncryptedDeliveryCoordinator", () => {
   it("continues recovery after reset aborts a committed activation response", async () => {
     const api = new FakePrivateApi();
     api.commitActivationBeforeAbort = true;
-    api.failGetActivatedCount = 1;
+    api.failResolveCount = 1;
     const sleeper = new FakeSleeper();
     const registry = new MemoryIssuedSessionRegistry();
     const controller = new AbortController();
@@ -202,7 +209,7 @@ describe("EncryptedDeliveryCoordinator", () => {
     controller.abort();
 
     await expect(issuing).resolves.toMatchObject({ id: api.createdId });
-    expect(api.calls.filter(({ operation }) => operation === "get-activated")).toHaveLength(2);
+    expect(api.calls.filter(({ operation }) => operation === "resolve")).toHaveLength(2);
     expect(api.deletedPendingIds).toEqual([]);
     expect(api.createAttempts).toBe(1);
     expect(registry.activeCount()).toBe(1);
@@ -211,13 +218,13 @@ describe("EncryptedDeliveryCoordinator", () => {
   it("retains a persistent ambiguous activation for a later same-generation recovery", async () => {
     const api = new FakePrivateApi();
     api.commitActivationBeforeResponseError = true;
-    api.failGetActivatedCount = 3;
+    api.failResolveCount = 3;
     const sleeper = new FakeSleeper();
     const registry = new MemoryIssuedSessionRegistry();
     const coordinator = new EncryptedDeliveryCoordinator(api, registry, sleeper.sleep);
 
     await expect(coordinator.issue(validIssueInput())).rejects.toThrow("activation response lost");
-    expect(api.calls.filter(({ operation }) => operation === "get-activated")).toHaveLength(3);
+    expect(api.calls.filter(({ operation }) => operation === "resolve")).toHaveLength(3);
     expect(api.deletedPendingIds).toEqual([]);
     expect(api.createAttempts).toBe(1);
     expect(sleeper.delays).toEqual([1_000, 2_000]);
@@ -233,7 +240,7 @@ describe("EncryptedDeliveryCoordinator", () => {
   it("prunes an expired recovery from an old generation without deleting it blindly", async () => {
     const api = new FakePrivateApi();
     api.commitActivationBeforeResponseError = true;
-    api.failGetActivatedCount = 3;
+    api.failResolveCount = 3;
     const time = { value: 1_000 };
     const coordinator = new EncryptedDeliveryCoordinator(
       api,
@@ -254,7 +261,7 @@ describe("EncryptedDeliveryCoordinator", () => {
   it("keeps a failed recovery retryable past its initial backoff window", async () => {
     const api = new FakePrivateApi();
     api.commitActivationBeforeResponseError = true;
-    api.failGetActivatedCount = 3;
+    api.failResolveCount = 3;
     const time = { value: 1_000 };
     const registry = new MemoryIssuedSessionRegistry();
     const coordinator = new EncryptedDeliveryCoordinator(
@@ -277,7 +284,7 @@ describe("EncryptedDeliveryCoordinator", () => {
   it("releases locally expired recovery material without deleting or recreating during the prune crossover", async () => {
     const api = new FakePrivateApi();
     api.commitActivationBeforeResponseError = true;
-    api.failGetActivatedCount = 3;
+    api.failResolveCount = 3;
     let now = 1_000;
     const crossoverTimes: number[] = [];
     const coordinator = new EncryptedDeliveryCoordinator(
@@ -294,14 +301,14 @@ describe("EncryptedDeliveryCoordinator", () => {
     await expect(coordinator.issue(validIssueInput())).rejects.toThrow("activation response lost");
     expect(api.createAttempts).toBe(1);
     expect(api.deletedPendingIds).toEqual([]);
-    expect(api.calls.filter(({ operation }) => operation === "get-activated")).toHaveLength(3);
+    expect(api.calls.filter(({ operation }) => operation === "resolve")).toHaveLength(3);
     expect(coordinator.pruneRetainedRecoveries()).toBe(0);
   });
 
   it("cleans up and retries only after recovery definitively reports inactive", async () => {
     const api = new FakePrivateApi();
     api.failActivateCount = 1;
-    api.failGetActivatedCount = 1;
+    api.failResolveCount = 1;
     const sleeper = new FakeSleeper();
     const coordinator = new EncryptedDeliveryCoordinator(
       api,
@@ -314,19 +321,18 @@ describe("EncryptedDeliveryCoordinator", () => {
     expect(api.calls.map(({ operation }) => operation)).toEqual([
       "create",
       "activate",
-      "get-activated",
-      "get-activated",
-      "delete",
+      "resolve",
+      "resolve",
       "create",
       "activate",
     ]);
     expect(sleeper.delays).toEqual([1_000, 1_000]);
   });
 
-  it("stops when pending cleanup fails instead of creating another ciphertext", async () => {
+  it("keeps a failed atomic resolution retryable instead of creating another ciphertext", async () => {
     const api = new FakePrivateApi();
-    api.failActivateCount = 1;
-    api.failDeleteCount = 1;
+    api.commitActivationBeforeResponseError = true;
+    api.failResolveCount = 3;
     const sleeper = new FakeSleeper();
     const coordinator = new EncryptedDeliveryCoordinator(
       api,
@@ -334,12 +340,9 @@ describe("EncryptedDeliveryCoordinator", () => {
       sleeper.sleep,
     );
 
-    await expect(coordinator.issue(validIssueInput())).rejects.toMatchObject({
-      message: "temporary activation failure",
-      cause: expect.objectContaining({ message: "pending cleanup failed" }),
-    });
+    await expect(coordinator.issue(validIssueInput())).rejects.toThrow("activation response lost");
     expect(api.createAttempts).toBe(1);
-    expect(sleeper.delays).toEqual([]);
+    expect(sleeper.delays).toEqual([1_000, 2_000]);
   });
 
   it("keeps an activated session registered after a later reset abort", async () => {
@@ -364,8 +367,8 @@ describe("FetchPrivateApiClient", () => {
       if (String(url).endsWith("/activate")) {
         return jsonResponse({ publicToken: "public-token", expiresAt: 1_800_000_000_000 });
       }
-      if (String(url).endsWith("/activation")) {
-        return jsonResponse({ publicToken: "public-token", expiresAt: 1_800_000_000_000 });
+      if (String(url).endsWith("/resolve")) {
+        return jsonResponse({ status: "active", publicToken: "public-token", expiresAt: 1_800_000_000_000 });
       }
       if (init?.method === "POST") return jsonResponse({ id: "pending-1" }, 201);
       return new Response(null, { status: 204 });
@@ -377,7 +380,8 @@ describe("FetchPrivateApiClient", () => {
       publicToken: "public-token",
       expiresAt: 1_800_000_000_000,
     });
-    await expect(client.getActivated("pending-1")).resolves.toEqual({
+    await expect(client.resolveActivationOrDelete("pending-1")).resolves.toEqual({
+      status: "active",
       publicToken: "public-token",
       expiresAt: 1_800_000_000_000,
     });
@@ -386,7 +390,7 @@ describe("FetchPrivateApiClient", () => {
     expect(requests.map(({ url, init }) => [url, init?.method])).toEqual([
       ["/api/sessions", "POST"],
       ["/api/sessions/pending-1/activate", "POST"],
-      ["/api/sessions/pending-1/activation", undefined],
+      ["/api/sessions/pending-1/resolve", "POST"],
       ["/api/sessions/pending-1", "DELETE"],
     ]);
     expect(requests[0]?.init?.headers).toEqual({ "content-type": "application/octet-stream" });

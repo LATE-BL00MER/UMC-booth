@@ -1,9 +1,13 @@
 export interface PrivateApiClient {
   createPending(ciphertext: Uint8Array, signal: AbortSignal): Promise<{ id: string }>;
   activate(id: string, signal: AbortSignal): Promise<{ publicToken: string; expiresAt: number }>;
-  getActivated(id: string): Promise<{ publicToken: string; expiresAt: number } | null>;
+  resolveActivationOrDelete(id: string): Promise<ActivationResolution>;
   deletePending(id: string): Promise<void>;
 }
+
+export type ActivationResolution =
+  | { status: "active"; publicToken: string; expiresAt: number }
+  | { status: "deleted" };
 
 export class FetchPrivateApiClient implements PrivateApiClient {
   constructor(private readonly fetchFn: typeof fetch = fetch) {}
@@ -32,11 +36,14 @@ export class FetchPrivateApiClient implements PrivateApiClient {
     );
   }
 
-  async getActivated(id: string): Promise<{ publicToken: string; expiresAt: number } | null> {
-    const response = await this.fetchFn(`/api/sessions/${encodeURIComponent(id)}/activation`);
-    if (response.status === 404) return null;
-    return readJson(response, ["publicToken", "expiresAt"], (value): value is { publicToken: string; expiresAt: number } =>
-      isRecord(value) && isString(value.publicToken) && isFiniteNumber(value.expiresAt),
+  async resolveActivationOrDelete(id: string): Promise<ActivationResolution> {
+    const response = await this.fetchFn(`/api/sessions/${encodeURIComponent(id)}/resolve`, { method: "POST" });
+    return readJson(response, "status", (value): value is ActivationResolution =>
+      isRecord(value)
+      && (
+        value.status === "deleted"
+        || value.status === "active" && isString(value.publicToken) && isFiniteNumber(value.expiresAt)
+      ),
     );
   }
 

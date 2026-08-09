@@ -90,7 +90,7 @@ function createFakeServices(): AppServices {
     api: {
       createPending: vi.fn(),
       activate: vi.fn(),
-      getActivated: vi.fn(async () => null),
+      resolveActivationOrDelete: vi.fn(async () => ({ status: "deleted" as const })),
       deletePending: vi.fn(async () => undefined),
     },
     frames: [frame],

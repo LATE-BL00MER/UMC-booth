@@ -77,13 +77,9 @@ export function buildPrivateServer(deps: PrivateServerDependencies): FastifyInst
     }
   });
 
-  app.get<{ Params: { id: string } }>("/api/sessions/:id/activation", async (request, reply) => {
-    try {
-      const session = await deps.store.getActivated(request.params.id);
-      return session === null ? sendSafeError(reply, 404) : reply.send(session);
-    } catch {
-      return sendSafeError(reply, 404);
-    }
+  app.post<{ Params: { id: string } }>("/api/sessions/:id/resolve", async (request, reply) => {
+    const resolution = await deps.store.resolveActivationOrDelete(request.params.id);
+    return reply.send(resolution);
   });
 
   app.delete<{ Params: { id: string } }>("/api/sessions/:id", async (request, reply) => {
