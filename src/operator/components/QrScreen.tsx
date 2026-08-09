@@ -9,18 +9,25 @@ export interface QrScreenProps {
 
 export function QrScreen({ issued }: QrScreenProps) {
   const [qrDataUrl, setQrDataUrl] = useState<string | null>(null);
+  const [qrError, setQrError] = useState(false);
+  const [renderAttempt, setRenderAttempt] = useState(0);
   const [remaining, setRemaining] = useState(() => remainingMilliseconds(issued.expiresAt));
 
   useEffect(() => {
     let cancelled = false;
     setQrDataUrl(null);
-    void toDataURL(issued.deliveryUrl, { errorCorrectionLevel: "M" }).then((dataUrl) => {
-      if (!cancelled) setQrDataUrl(dataUrl);
-    });
+    setQrError(false);
+    void toDataURL(issued.deliveryUrl, { errorCorrectionLevel: "M" })
+      .then((dataUrl) => {
+        if (!cancelled) setQrDataUrl(dataUrl);
+      })
+      .catch(() => {
+        if (!cancelled) setQrError(true);
+      });
     return () => {
       cancelled = true;
     };
-  }, [issued.deliveryUrl]);
+  }, [issued.deliveryUrl, renderAttempt]);
 
   useEffect(() => {
     setRemaining(remainingMilliseconds(issued.expiresAt));
@@ -30,7 +37,14 @@ export function QrScreen({ issued }: QrScreenProps) {
 
   return (
     <section aria-label="QR 코드">
-      {qrDataUrl === null ? (
+      {qrError ? (
+        <div role="alert">
+          <p>QR 코드를 만들지 못했습니다</p>
+          <button type="button" onClick={() => setRenderAttempt((attempt) => attempt + 1)}>
+            QR 코드 다시 만들기
+          </button>
+        </div>
+      ) : qrDataUrl === null ? (
         <p aria-live="polite">QR 코드를 만드는 중입니다</p>
       ) : (
         <img src={qrDataUrl} alt="사진 받기 QR 코드" />

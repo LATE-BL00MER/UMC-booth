@@ -1,4 +1,5 @@
 import { act, render, screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 const { toDataURL } = vi.hoisted(() => ({
@@ -20,7 +21,8 @@ const issued: IssuedSession = {
 describe("QrScreen", () => {
   afterEach(() => {
     vi.useRealTimers();
-    toDataURL.mockClear();
+    toDataURL.mockReset();
+    toDataURL.mockResolvedValue("data:image/png;base64,qr-code");
   });
 
   it("renders a medium-correction QR image, remaining time, and multi-device guidance", async () => {
@@ -46,5 +48,60 @@ describe("QrScreen", () => {
     expect(screen.getByText("00:01")).toBeVisible();
     act(() => vi.advanceTimersByTime(1_000));
     expect(screen.getByText("00:00")).toBeVisible();
+  });
+
+  it("shows a recoverable error and retries QR rendering without reissuing the session", async () => {
+    const user = userEvent.setup();
+    toDataURL
+      .mockRejectedValueOnce(new Error("QR rendering failed"))
+      .mockResolvedValueOnce("data:image/png;base64,retried-qr-code");
+
+    render(<QrScreen issued={issued} />);
+    await act(async () => undefined);
+
+    expect(screen.getByText("QR 코드를 만들지 못했습니다")).toBeVisible();
+    await user.click(screen.getByRole("button", { name: "QR 코드 다시 만들기" }));
+
+    expect(await screen.findByRole("img", { name: "사진 받기 QR 코드" })).toHaveAttribute(
+      "src",
+      "data:image/png;base64,retried-qr-code",
+    );
+    expect(toDataURL).toHaveBeenNthCalledWith(1, issued.deliveryUrl, { errorCorrectionLevel: "M" });
+    expect(toDataURL).toHaveBeenNthCalledWith(2, issued.deliveryUrl, { errorCorrectionLevel: "M" });
+  });
+
+  it("absorbs a stale QR rendering rejection after the active QR render changes", async () => {
+    let rejectRendering!: (reason?: unknown) => void;
+    toDataURL
+      .mockImplementationOnce(
+        () => new Promise<string>((_resolve, reject) => {
+          rejectRendering = reject;
+        }),
+      )
+      .mockResolvedValueOnce("data:image/png;base64,current-qr-code");
+
+    const { rerender } = render(<QrScreen issued={issued} />);
+    await act(async () => undefined);
+    rerender(
+      <QrScreen
+        issued={{
+          ...issued,
+          deliveryUrl: "https://new-booth.example/d/public-token#key=secret-fragment",
+        }}
+      />,
+    );
+    expect(await screen.findByRole("img", { name: "사진 받기 QR 코드" })).toHaveAttribute(
+      "src",
+      "data:image/png;base64,current-qr-code",
+    );
+    await act(async () => {
+      rejectRendering(new Error("late QR failure"));
+      await Promise.resolve();
+    });
+
+    expect(screen.getByRole("img", { name: "사진 받기 QR 코드" })).toHaveAttribute(
+      "src",
+      "data:image/png;base64,current-qr-code",
+    );
   });
 });
