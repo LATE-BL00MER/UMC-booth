@@ -33,6 +33,7 @@ interface PendingActivationRecovery {
 type RecoveryResult =
   | { kind: "active"; issued: IssuedSession }
   | { kind: "inactive" }
+  | { kind: "expired" }
   | { kind: "unavailable"; error: unknown };
 
 const recoveryDelaysMs = [0, 1_000, 2_000] as const;
@@ -55,7 +56,11 @@ export class EncryptedDeliveryCoordinator implements DeliveryCoordinator {
     signal: AbortSignal;
     onPendingSessionCreated?(id: string): void;
   }): Promise<IssuedSession> {
-    this.pruneRetainedRecoveries();
+    const expired = this.pruneExpiredRecoveries();
+    const expiredCurrentGeneration = expired.get(input.generation);
+    if (expiredCurrentGeneration !== undefined) {
+      throw localRecoveryExpiryError(expiredCurrentGeneration.activationError);
+    }
     const retained = this.pendingRecoveries.get(input.generation);
     if (retained !== undefined) {
       const recovery = await this.recoverActivation(input.generation, retained);
@@ -64,6 +69,9 @@ export class EncryptedDeliveryCoordinator implements DeliveryCoordinator {
       }
       if (recovery.kind === "unavailable") {
         throw errorWithCause(retained.activationError, recovery.error, "Delivery activation recovery failed");
+      }
+      if (recovery.kind === "expired") {
+        throw localRecoveryExpiryError(retained.activationError);
       }
       await this.deleteRetainedPending(retained);
     }
@@ -120,6 +128,9 @@ export class EncryptedDeliveryCoordinator implements DeliveryCoordinator {
           if (recovered.kind === "unavailable") {
             throw errorWithCause(error, recovered.error, "Delivery activation recovery failed");
           }
+          if (recovered.kind === "expired") {
+            throw localRecoveryExpiryError(error);
+          }
         }
         if (pendingId !== null) {
           try {
@@ -161,21 +172,21 @@ export class EncryptedDeliveryCoordinator implements DeliveryCoordinator {
    * invoke this during maintenance; `issue()` also prunes before every attempt.
    */
   pruneRetainedRecoveries(now = this.now()): number {
-    let removed = 0;
+    return this.pruneExpiredRecoveries(now).size;
+  }
+
+  private pruneExpiredRecoveries(now = this.now()): Map<number, PendingActivationRecovery> {
+    const expired = new Map<number, PendingActivationRecovery>();
     for (const [generation, recovery] of this.pendingRecoveries) {
       if (recovery.expiresAt <= now) {
         this.pendingRecoveries.delete(generation);
-        removed += 1;
+        expired.set(generation, recovery);
       }
     }
-    return removed;
+    return expired;
   }
 
   private async recoverActivation(generation: number, recovery: PendingActivationRecovery): Promise<RecoveryResult> {
-    if (recovery.expiresAt <= this.now()) {
-      this.clearRecovery(generation, recovery);
-      return { kind: "inactive" };
-    }
     const recoverySignal = new AbortController().signal;
     let lastError: unknown = new Error("Delivery activation recovery failed");
 
@@ -184,7 +195,15 @@ export class EncryptedDeliveryCoordinator implements DeliveryCoordinator {
         if (delay > 0) {
           await this.sleep(delay, recoverySignal);
         }
+        if (recovery.expiresAt <= this.now()) {
+          this.clearRecovery(generation, recovery);
+          return { kind: "expired" };
+        }
         const activated = await this.api.getActivated(recovery.id);
+        if (recovery.expiresAt <= this.now()) {
+          this.clearRecovery(generation, recovery);
+          return { kind: "expired" };
+        }
         if (activated === null) {
           this.clearRecovery(generation, recovery);
           return { kind: "inactive" };
@@ -255,6 +274,14 @@ function errorWithCause(primaryError: unknown, cause: unknown, fallbackMessage: 
     return error;
   }
   return new Error(fallbackMessage, { cause });
+}
+
+function localRecoveryExpiryError(activationError: unknown): Error {
+  return errorWithCause(
+    activationError,
+    new Error("Retained delivery activation recovery expired locally"),
+    "Delivery activation recovery expired locally",
+  );
 }
 
 function abortError(): DOMException {

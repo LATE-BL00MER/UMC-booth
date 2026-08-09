@@ -274,6 +274,30 @@ describe("EncryptedDeliveryCoordinator", () => {
     expect(registry.activeCount()).toBe(1);
   });
 
+  it("releases locally expired recovery material without deleting or recreating during the prune crossover", async () => {
+    const api = new FakePrivateApi();
+    api.commitActivationBeforeResponseError = true;
+    api.failGetActivatedCount = 3;
+    let now = 1_000;
+    const crossoverTimes: number[] = [];
+    const coordinator = new EncryptedDeliveryCoordinator(
+      api,
+      new MemoryIssuedSessionRegistry(),
+      new FakeSleeper().sleep,
+      () => crossoverTimes.shift() ?? now,
+    );
+
+    await expect(coordinator.issue(validIssueInput())).rejects.toThrow("activation response lost");
+    now = 601_000;
+    crossoverTimes.push(600_999, 601_000);
+
+    await expect(coordinator.issue(validIssueInput())).rejects.toThrow("activation response lost");
+    expect(api.createAttempts).toBe(1);
+    expect(api.deletedPendingIds).toEqual([]);
+    expect(api.calls.filter(({ operation }) => operation === "get-activated")).toHaveLength(3);
+    expect(coordinator.pruneRetainedRecoveries()).toBe(0);
+  });
+
   it("cleans up and retries only after recovery definitively reports inactive", async () => {
     const api = new FakePrivateApi();
     api.failActivateCount = 1;
