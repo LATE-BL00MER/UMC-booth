@@ -255,7 +255,7 @@ function parsePersistedMetrics(value: unknown): AggregateMetricsSnapshot {
   if (keys !== currentKeys && keys !== legacyKeys) {
     throw new Error("Invalid aggregate metrics");
   }
-  for (const key of legacyPersistedKeys) {
+  for (const key of keys === currentKeys ? persistedKeys : legacyPersistedKeys) {
     if (!Number.isSafeInteger(record[key]) || (record[key] as number) < 0) {
       throw new Error("Invalid aggregate metrics");
     }

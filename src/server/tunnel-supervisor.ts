@@ -205,7 +205,10 @@ export class TunnelSupervisor {
         this.healthAbortController = null;
         this.consecutiveHealthFailures += 1;
         if (this.statusValue.state === "healthy" && this.consecutiveHealthFailures < MAX_CONSECUTIVE_HEALTH_FAILURES) {
-          this.scheduleHealthProbe(run, child, publicUrl);
+          // Readiness must close on the very first external failure, even though
+          // the still-live process gets one bounded confirmation probe before restart.
+          this.statusValue = downStatus("health-failed");
+          this.scheduleHealthProbe(run, child, publicUrl, true);
         } else {
           this.fail(run, "health-failed");
         }
@@ -249,12 +252,12 @@ export class TunnelSupervisor {
     this.restartTimer = null;
   }
 
-  private scheduleHealthProbe(run: number, child: TunnelChild, publicUrl: string): void {
-    if (!this.isCurrentChild(run, child) || this.statusValue.state !== "healthy") return;
+  private scheduleHealthProbe(run: number, child: TunnelChild, publicUrl: string, allowDown = false): void {
+    if (!this.isCurrentChild(run, child) || (this.statusValue.state !== "healthy" && !(allowDown && this.statusValue.state === "down"))) return;
     if (this.healthTimer !== null) this.timers.clearTimeout(this.healthTimer);
     this.healthTimer = this.timers.setTimeout(() => {
       this.healthTimer = null;
-      if (!this.isCurrentChild(run, child) || this.statusValue.state !== "healthy") return;
+      if (!this.isCurrentChild(run, child) || (this.statusValue.state !== "healthy" && !(allowDown && this.statusValue.state === "down"))) return;
       void this.probeHealth(run, child, publicUrl);
     }, HEALTH_PROBE_INTERVAL_MS);
   }

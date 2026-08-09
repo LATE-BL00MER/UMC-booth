@@ -166,4 +166,46 @@ describe("FrameScreen", () => {
     unmount();
     expect(revokeObjectURL).toHaveBeenCalledTimes(2);
   });
+
+  it("clears the prior preview and reports a safe state when replacement composition fails", async () => {
+    let calls = 0;
+    const compose = vi.fn(async (_input: { photos: readonly Blob[]; frame: FrameManifest }) => {
+      calls += 1;
+      if (calls === 1) return new Blob(["preview"], { type: "image/jpeg" });
+      throw new Error("overlay unavailable");
+    });
+    const createObjectURL = vi.fn(() => "blob:first-preview");
+    const revokeObjectURL = vi.fn();
+    const { rerender } = render(
+      <FrameScreen
+        photos={photos}
+        selectedIds={["p1", "p2", "p3", "p4"]}
+        frames={frames}
+        selectedFrameId="basic"
+        compositor={{ compose }}
+        createObjectURL={createObjectURL}
+        revokeObjectURL={revokeObjectURL}
+        onFrameSelect={() => undefined}
+        onContinue={() => undefined}
+      />,
+    );
+    await screen.findByAltText("선택한 프레임 합성 미리보기");
+
+    rerender(
+      <FrameScreen
+        photos={photos}
+        selectedIds={["p1", "p2", "p3", "p4"]}
+        frames={frames}
+        selectedFrameId="bright"
+        compositor={{ compose }}
+        createObjectURL={createObjectURL}
+        revokeObjectURL={revokeObjectURL}
+        onFrameSelect={() => undefined}
+        onContinue={() => undefined}
+      />,
+    );
+    expect(revokeObjectURL).toHaveBeenCalledWith("blob:first-preview");
+    expect(screen.queryByAltText("선택한 프레임 합성 미리보기")).not.toBeInTheDocument();
+    expect(await screen.findByRole("alert")).toHaveTextContent("미리보기를 만들지 못했습니다");
+  });
 });

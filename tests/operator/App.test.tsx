@@ -204,6 +204,30 @@ describe("App", () => {
     expect((services.camera as FakeCamera).captureCount).toBe(0);
   });
 
+  it("disables and guards welcome start when a live status poll rejects", async () => {
+    vi.useFakeTimers();
+    const services = createFakeServices();
+    let reads = 0;
+    services.preflight = {
+      readStatus: async () => {
+        reads += 1;
+        if (reads === 1) return runtimeReadyStatus();
+        throw new Error("status unavailable");
+      },
+    };
+    render(<App services={services} />);
+
+    await flushReact();
+    fireEvent.click(screen.getByRole("checkbox", { name: "모든 팀원이 촬영에 동의했습니다" }));
+    await act(async () => { await vi.advanceTimersByTimeAsync(2_000); });
+    await flushReact();
+
+    const start = screen.getByRole("button", { name: "체험 시작" });
+    expect(start).toBeDisabled();
+    fireEvent.click(start);
+    expect((services.camera as FakeCamera).captureCount).toBe(0);
+  });
+
   it("lets staff redisplay an unexpired issued QR after reset using the replacement tunnel URL", async () => {
     const user = userEvent.setup();
     const services = createFakeServices();

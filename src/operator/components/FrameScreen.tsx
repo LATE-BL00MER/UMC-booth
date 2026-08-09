@@ -28,6 +28,7 @@ export function FrameScreen({
   onContinue,
 }: FrameScreenProps) {
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
+  const [previewFailed, setPreviewFailed] = useState(false);
   const previewUrlRef = useRef<string | null>(null);
   const makeObjectUrl = createObjectURL ?? defaultCreateObjectURL;
   const revokePreviewUrl = revokeObjectURL ?? defaultRevokeObjectURL;
@@ -47,11 +48,15 @@ export function FrameScreen({
     if (!frame || selectedPhotos.length !== 4) {
       releasePreview(previewUrlRef, revokePreviewUrl);
       setPreviewUrl(null);
+      setPreviewFailed(false);
       return;
     }
     let stale = false;
     let createdUrl: string | null = null;
     let installed = false;
+    releasePreview(previewUrlRef, revokePreviewUrl);
+    setPreviewUrl(null);
+    setPreviewFailed(false);
     void compositor.compose({ photos: selectedPhotos.map((photo) => photo.blob), frame })
       .then((jpeg) => {
         createdUrl = makeObjectUrl(jpeg);
@@ -65,7 +70,7 @@ export function FrameScreen({
         setPreviewUrl(createdUrl);
       })
       .catch(() => {
-        // A failed disposable preview never changes the confirmed composition path.
+        if (!stale) setPreviewFailed(true);
       });
     return () => {
       stale = true;
@@ -83,6 +88,7 @@ export function FrameScreen({
         ))}
       </div>
       {previewUrl ? <img src={previewUrl} alt="선택한 프레임 합성 미리보기" /> : null}
+      {previewFailed ? <p role="alert">미리보기를 만들지 못했습니다</p> : null}
       <div role="radiogroup" aria-label="프레임 목록">
         {frames.map((frame) => (
           <label key={frame.id}>

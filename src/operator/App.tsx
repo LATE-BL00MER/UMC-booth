@@ -304,7 +304,11 @@ export function App({ services }: { services: AppServices }) {
           if (!controller.signal.aborted && mounted.current) applyRuntimeStatus(status);
         })
         .catch(() => {
-          if (!controller.signal.aborted) validatedPublicUrl.current = null;
+          if (!controller.signal.aborted && mounted.current) {
+            validatedPublicUrl.current = null;
+            acceptingLiveRef.current = false;
+            setAcceptingLive(false);
+          }
         })
         .finally(() => {
           polling = false;

@@ -21,6 +21,23 @@ describe("aggregate metrics persistence", () => {
     await restarted.initialize();
     expect(restarted.snapshot()).toMatchObject({ teamStarts: 1, completedQrIssuances: 1 });
   });
+
+  it("rejects non-integer new operator counters in persisted snapshots", async () => {
+    const root = await mkdtemp(join(tmpdir(), "umc-metrics-counter-types-"));
+    const path = join(root, "metrics.json");
+    await writeFile(path, JSON.stringify({
+      teamStarts: 1.5,
+      completedQrIssuances: 0,
+      pages: 0,
+      downloads: 0,
+      decryptSuccess: 0,
+      saveIntent: 0,
+      joinClick: 0,
+      updatedAt: 0,
+    }));
+
+    await expect(new AggregateMetrics({ persistencePath: path }).initialize()).rejects.toThrow("Invalid aggregate metrics");
+  });
   it("atomically persists only aggregate counters and updatedAt after every accepted metric", async () => {
     const root = await mkdtemp(join(tmpdir(), "umc-metrics-"));
     const path = join(root, "runtime-data", "metrics.json");

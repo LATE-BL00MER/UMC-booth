@@ -66,7 +66,19 @@ During rehearsals and hourly during the event, inspect the configured session di
 
 ## Shutdown
 
-At closing, block new teams and wait for the final displayed QR's full 10-minute timer to finish. Then, from the event MacBook, request deletion through the loopback-only private listener (the configured default private port is `4173`):
+Before doors open, record the local aggregate baseline from the loopback-only private listener (the configured default private port is `4173`):
+
+```bash
+curl --fail --silent --show-error http://127.0.0.1:4173/api/metrics
+```
+
+At closing, block new teams and wait for the final displayed QR's full 10-minute timer to finish. Record the final aggregate snapshot **before** shutdown, because shutdown closes the private listener:
+
+```bash
+curl --fail --silent --show-error http://127.0.0.1:4173/api/metrics
+```
+
+Then request deletion:
 
 ```bash
 curl --fail --silent --show-error -X POST http://127.0.0.1:4173/api/shutdown \
@@ -87,4 +99,4 @@ Only after both commands succeed should staff stop the booth process and power/n
 
 Record aggregate counts only: team starts, completed QRs, successful decryptions, save intents, join clicks, and UTM visits. Compare the relevant rates against the 90% team-start-to-completed-QR target, the 95% successful-decryption target, and the 30% join-click target. Do not export photos, session identifiers, or any recipient-level records.
 
-Before doors open, save the local aggregate `/api/metrics` snapshot as the event baseline; record the same final snapshot after shutdown. It contains counters only, never session IDs, QR URLs, tokens, keys, or participant data.
+The baseline and final `/api/metrics` snapshots contain counters only, never session IDs, QR URLs, tokens, keys, or participant data.

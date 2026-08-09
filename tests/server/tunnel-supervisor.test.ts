@@ -196,7 +196,7 @@ describe("TunnelSupervisor", () => {
     expect(harness.timers.delays).toContain(5_000);
   });
 
-  it("probes a healthy external route repeatedly and restarts after two consecutive failures", async () => {
+  it("publishes the first recurring external health failure as down before restarting after two", async () => {
     const timers = new TestTimers();
     const children: TestChild[] = [];
     let probes = 0;
@@ -222,7 +222,13 @@ describe("TunnelSupervisor", () => {
     await Promise.resolve();
     await Promise.resolve();
     await Promise.resolve();
-    expect(supervisor.status()).toMatchObject({ state: "healthy" });
+    expect(supervisor.status()).toEqual({
+      state: "down",
+      publicUrl: null,
+      latencyMs: null,
+      error: "health-failed",
+    });
+    expect(children[0]!.killed).toBe(0);
     timers.runNext(15_000);
     await Promise.resolve();
     await Promise.resolve();
