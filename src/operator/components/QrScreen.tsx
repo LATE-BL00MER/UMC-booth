@@ -41,7 +41,7 @@ export function QrScreen({ issued }: QrScreenProps) {
         <div role="alert">
           <p>QR 코드를 만들지 못했습니다</p>
           <button type="button" onClick={() => setRenderAttempt((attempt) => attempt + 1)}>
-            QR 코드 다시 만들기
+            다시 시도
           </button>
         </div>
       ) : qrDataUrl === null ? (

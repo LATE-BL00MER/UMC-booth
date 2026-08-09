@@ -77,20 +77,27 @@ export function buildPrivateServer(deps: PrivateServerDependencies): FastifyInst
     }
   });
 
+  app.get<{ Params: { id: string } }>("/api/sessions/:id/activation", async (request, reply) => {
+    try {
+      const session = await deps.store.getActivated(request.params.id);
+      return session === null ? sendSafeError(reply, 404) : reply.send(session);
+    } catch {
+      return sendSafeError(reply, 404);
+    }
+  });
+
   app.delete<{ Params: { id: string } }>("/api/sessions/:id", async (request, reply) => {
     try {
+      const deleted = await deps.store.deletePending(request.params.id);
+      if (deleted) return reply.code(204).send();
       const record = await deps.store.inspectById(request.params.id);
-      if (record.status !== "pending") {
-        return sendSafeError(reply, 409);
-      }
+      return record.status === "pending" ? reply.code(204).send() : sendSafeError(reply, 409);
     } catch (error) {
       if (error instanceof TypeError || error instanceof Error && error.message === "Session not found") {
         return reply.code(204).send();
       }
       throw error;
     }
-    await deps.store.deletePending(request.params.id);
-    return reply.code(204).send();
   });
 
   app.post("/api/shutdown", async (request, reply) => {

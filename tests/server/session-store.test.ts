@@ -127,6 +127,20 @@ describe("FileSessionStore", () => {
     expect(await readdir(root)).toEqual([]);
   });
 
+  it("linearizes reset deletion behind a committed activation without losing ciphertext", async () => {
+    const { store } = await createStore();
+    const pending = await store.createPending(new Uint8Array([7, 8, 9]));
+
+    const [activated, deleted] = await Promise.all([
+      store.activate(pending.id),
+      store.deletePending(pending.id),
+    ]);
+
+    expect(deleted).toBe(false);
+    expect((await store.readActive(activated.publicToken)).kind).toBe("active");
+    await expect(store.getActivated(pending.id)).resolves.toEqual(activated);
+  });
+
   it("purges orphaned session artifacts left by interrupted atomic writes", async () => {
     const { root, store } = await createStore();
     const id = "AAAAAAAAAAAAAAAAAAAAAA";

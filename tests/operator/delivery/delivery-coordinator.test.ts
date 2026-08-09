@@ -19,6 +19,8 @@ class FakePrivateApi implements PrivateApiClient {
   createdId = "pending-1";
   deletedPendingIds: string[] = [];
   pauseOnActivate = false;
+  commitActivationBeforeAbort = false;
+  activated: { publicToken: string; expiresAt: number } | null = null;
 
   async createPending(ciphertext: Uint8Array, signal: AbortSignal): Promise<{ id: string }> {
     this.calls.push({ operation: "create", ciphertext: [...ciphertext] });
@@ -37,6 +39,12 @@ class FakePrivateApi implements PrivateApiClient {
       this.failActivateCount -= 1;
       throw new Error("temporary activation failure");
     }
+    if (this.commitActivationBeforeAbort) {
+      this.activated = { publicToken: "public-token", expiresAt: 1_800_000_000_000 };
+      return new Promise((_, reject) => {
+        signal.addEventListener("abort", () => reject(abortError()), { once: true });
+      });
+    }
     if (!this.pauseOnActivate) {
       if (signal.aborted) throw abortError();
       return { publicToken: "public-token", expiresAt: 1_800_000_000_000 };
@@ -53,6 +61,11 @@ class FakePrivateApi implements PrivateApiClient {
       this.failDeleteCount -= 1;
       throw new Error("pending cleanup failed");
     }
+  }
+
+  async getActivated(id: string): Promise<{ publicToken: string; expiresAt: number } | null> {
+    this.calls.push({ operation: "get-activated", id });
+    return this.activated;
   }
 }
 
@@ -107,6 +120,23 @@ describe("EncryptedDeliveryCoordinator", () => {
 
     await expect(promise).rejects.toMatchObject({ name: "AbortError" });
     expect(api.deletedPendingIds).toEqual([api.createdId]);
+  });
+
+  it("registers the issued session when activation commits before its response is aborted", async () => {
+    const api = new FakePrivateApi();
+    api.commitActivationBeforeAbort = true;
+    const registry = new MemoryIssuedSessionRegistry();
+    const controller = new AbortController();
+    const coordinator = new EncryptedDeliveryCoordinator(api, registry);
+
+    const issuing = coordinator.issue(validIssueInput(controller.signal));
+    await vi.waitFor(() => expect(api.calls).toContainEqual({ operation: "activate", id: api.createdId }));
+    controller.abort();
+
+    await expect(issuing).resolves.toMatchObject({ id: api.createdId, publicToken: "public-token" });
+    expect(api.calls).toContainEqual({ operation: "get-activated", id: api.createdId });
+    expect(api.deletedPendingIds).toEqual([]);
+    expect(registry.activeCount()).toBe(1);
   });
 
   it("cleans up a failed activation before starting a retry", async () => {
@@ -172,6 +202,9 @@ describe("FetchPrivateApiClient", () => {
       if (String(url).endsWith("/activate")) {
         return jsonResponse({ publicToken: "public-token", expiresAt: 1_800_000_000_000 });
       }
+      if (String(url).endsWith("/activation")) {
+        return jsonResponse({ publicToken: "public-token", expiresAt: 1_800_000_000_000 });
+      }
       if (init?.method === "POST") return jsonResponse({ id: "pending-1" }, 201);
       return new Response(null, { status: 204 });
     });
@@ -182,11 +215,16 @@ describe("FetchPrivateApiClient", () => {
       publicToken: "public-token",
       expiresAt: 1_800_000_000_000,
     });
+    await expect(client.getActivated("pending-1")).resolves.toEqual({
+      publicToken: "public-token",
+      expiresAt: 1_800_000_000_000,
+    });
     await expect(client.deletePending("pending-1")).resolves.toBeUndefined();
 
     expect(requests.map(({ url, init }) => [url, init?.method])).toEqual([
       ["/api/sessions", "POST"],
       ["/api/sessions/pending-1/activate", "POST"],
+      ["/api/sessions/pending-1/activation", undefined],
       ["/api/sessions/pending-1", "DELETE"],
     ]);
     expect(requests[0]?.init?.headers).toEqual({ "content-type": "application/octet-stream" });

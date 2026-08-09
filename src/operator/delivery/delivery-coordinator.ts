@@ -45,10 +45,11 @@ export class EncryptedDeliveryCoordinator implements DeliveryCoordinator {
       if (delay > 0) await this.sleep(delay, input.signal);
 
       let pendingId: string | null = null;
+      let keyFragment: string | null = null;
       try {
         const key = await generatePhotoKey();
         throwIfAborted(input.signal);
-        const keyFragment = await exportKeyFragment(key);
+        keyFragment = await exportKeyFragment(key);
         const ciphertext = await encryptPhoto(plain, key);
         throwIfAborted(input.signal);
 
@@ -69,6 +70,19 @@ export class EncryptedDeliveryCoordinator implements DeliveryCoordinator {
         this.registry.add(issued, keyFragment);
         return issued;
       } catch (error) {
+        if (pendingId !== null && keyFragment !== null && (input.signal.aborted || isAbortError(error))) {
+          const activated = await this.api.getActivated(pendingId).catch(() => null);
+          if (activated !== null) {
+            const issued: IssuedSession = {
+              id: pendingId,
+              publicToken: activated.publicToken,
+              deliveryUrl: buildDeliveryUrl(input.publicBaseUrl, activated.publicToken, keyFragment),
+              expiresAt: activated.expiresAt,
+            };
+            this.registry.add(issued, keyFragment);
+            return issued;
+          }
+        }
         if (pendingId !== null) {
           try {
             await this.api.deletePending(pendingId);

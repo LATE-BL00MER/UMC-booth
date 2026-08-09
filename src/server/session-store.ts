@@ -31,6 +31,7 @@ export class FileSessionStore {
   private readonly activeTtlMs: number;
   private readonly pendingTtlMs: number;
   private readonly writesInProgress = new Set<string>();
+  private readonly sessionLocks = new Map<string, Promise<void>>();
   private lastSweepAt: number | null = null;
 
   constructor(options: FileSessionStoreOptions) {
@@ -68,30 +69,34 @@ export class FileSessionStore {
 
   async activate(id: string): Promise<{ id: string; publicToken: string; expiresAt: number }> {
     this.assertSessionId(id);
-    const record = await this.requireRecord(id);
-    if (record.status !== "pending") {
-      throw new Error("Session is not pending");
-    }
+    return this.withSessionLock(id, async () => {
+      const record = await this.requireRecord(id);
+      const now = this.clock.now();
+      if (record.status === "active" && record.expiresAt !== null && record.expiresAt > now) {
+        return { id, expiresAt: record.expiresAt, publicToken: formatPublicToken({ id, expiresAt: record.expiresAt }) };
+      }
+      if (record.status !== "pending") {
+        throw new Error("Session is not pending");
+      }
+      if (record.createdAt + this.pendingTtlMs <= now) {
+        await this.deleteSession(id);
+        throw new Error("Session expired");
+      }
 
-    const now = this.clock.now();
-    if (record.createdAt + this.pendingTtlMs <= now) {
-      await this.deleteSession(id);
-      throw new Error("Session expired");
-    }
-
-    const expiresAt = now + this.activeTtlMs;
-    const activeRecord: SessionRecord = {
-      ...record,
-      status: "active",
-      expiresAt,
-    };
-    this.writesInProgress.add(id);
-    try {
-      await this.writeAtomically(`${id}.json`, JSON.stringify(activeRecord));
-    } finally {
-      this.writesInProgress.delete(id);
-    }
-    return { id, expiresAt, publicToken: formatPublicToken({ id, expiresAt }) };
+      const expiresAt = now + this.activeTtlMs;
+      const activeRecord: SessionRecord = {
+        ...record,
+        status: "active",
+        expiresAt,
+      };
+      this.writesInProgress.add(id);
+      try {
+        await this.writeAtomically(`${id}.json`, JSON.stringify(activeRecord));
+      } finally {
+        this.writesInProgress.delete(id);
+      }
+      return { id, expiresAt, publicToken: formatPublicToken({ id, expiresAt }) };
+    });
   }
 
   async inspectById(id: string): Promise<SessionRecord> {
@@ -131,12 +136,29 @@ export class FileSessionStore {
     if (!this.isSessionId(id)) {
       return false;
     }
-    const record = await this.readRecord(id);
-    if (!record || record.status !== "pending") {
-      return false;
-    }
-    await this.deleteSession(id);
-    return true;
+    return this.withSessionLock(id, async () => {
+      const record = await this.readRecord(id);
+      if (!record || record.status !== "pending") {
+        return false;
+      }
+      await this.deleteSession(id);
+      return true;
+    });
+  }
+
+  async getActivated(id: string): Promise<{ id: string; publicToken: string; expiresAt: number } | null> {
+    this.assertSessionId(id);
+    return this.withSessionLock(id, async () => {
+      const record = await this.readRecord(id);
+      if (record?.status !== "active" || record.expiresAt === null || record.expiresAt <= this.clock.now()) {
+        return null;
+      }
+      return {
+        id,
+        expiresAt: record.expiresAt,
+        publicToken: formatPublicToken({ id, expiresAt: record.expiresAt }),
+      };
+    });
   }
 
   async sweep(): Promise<{ deletedPending: number; deletedExpired: number }> {
@@ -293,6 +315,24 @@ export class FileSessionStore {
       rm(this.binPath(id), { force: true }),
       rm(this.jsonPath(id), { force: true }),
     ]);
+  }
+
+  private async withSessionLock<T>(id: string, operation: () => Promise<T>): Promise<T> {
+    const previous = this.sessionLocks.get(id) ?? Promise.resolve();
+    let release!: () => void;
+    const current = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    this.sessionLocks.set(id, current);
+    await previous;
+    try {
+      return await operation();
+    } finally {
+      release();
+      if (this.sessionLocks.get(id) === current) {
+        this.sessionLocks.delete(id);
+      }
+    }
   }
 
   private binPath(id: string): string {

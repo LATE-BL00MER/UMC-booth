@@ -60,7 +60,7 @@ describe("QrScreen", () => {
     await act(async () => undefined);
 
     expect(screen.getByText("QR 코드를 만들지 못했습니다")).toBeVisible();
-    await user.click(screen.getByRole("button", { name: "QR 코드 다시 만들기" }));
+    await user.click(screen.getByRole("button", { name: "다시 시도" }));
 
     expect(await screen.findByRole("img", { name: "사진 받기 QR 코드" })).toHaveAttribute(
       "src",

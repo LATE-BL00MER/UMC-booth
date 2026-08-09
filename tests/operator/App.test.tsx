@@ -90,6 +90,7 @@ function createFakeServices(): AppServices {
     api: {
       createPending: vi.fn(),
       activate: vi.fn(),
+      getActivated: vi.fn(async () => null),
       deletePending: vi.fn(async () => undefined),
     },
     frames: [frame],
@@ -111,6 +112,8 @@ describe("App", () => {
   it("runs welcome, six captures, four selections, frame, QR, and reset", async () => {
     const user = userEvent.setup();
     const fakeServices = createFakeServices();
+    const compose = vi.fn(async (_input: Parameters<AppServices["compositor"]["compose"]>[0]) => new Blob(["composed"], { type: "image/jpeg" }));
+    fakeServices.compositor = { compose };
     render(<App services={fakeServices} />);
 
     await screen.findByRole("button", { name: "체험 시작" });
@@ -130,6 +133,13 @@ describe("App", () => {
 
     expect(await screen.findByRole("button", { name: "체험 시작" })).toBeVisible();
     expect(fakeServices.registry.activeCount()).toBe(1);
+    const [composition] = compose.mock.calls[0]!;
+    expect(await Promise.all(composition.photos.map((photo) => photo.text()))).toEqual([
+      "photo-4",
+      "photo-1",
+      "photo-6",
+      "photo-3",
+    ]);
   });
 
   it("requires complete readiness and team consent before capture can start", async () => {
@@ -296,10 +306,10 @@ describe("App", () => {
     await waitFor(() => expect(issue).toHaveBeenCalledOnce());
   });
 
-  it("completes reset before three seconds of fake time and deletes a known pending session", async () => {
+  it("completes reset before three seconds while a known pending cleanup hangs", async () => {
     vi.useFakeTimers();
     const services = createFakeServices();
-    const deletion = vi.fn(async () => undefined);
+    const deletion = vi.fn(() => new Promise<void>(() => undefined));
     services.api.deletePending = deletion;
     const delivery = deferred<IssuedSession>();
     const issue = vi.fn(async (input: Parameters<AppServices["delivery"]["issue"]>[0]) => {
@@ -336,6 +346,119 @@ describe("App", () => {
 
     expect(screen.getByRole("button", { name: "체험 시작" })).toBeVisible();
     expect(deletion).toHaveBeenCalledWith("pending-before-reset");
+  });
+
+  it("bounds reset when the next camera and readiness checks never settle", async () => {
+    vi.useFakeTimers();
+    const services = createFakeServices();
+    let probeCalls = 0;
+    let preflightCalls = 0;
+    const camera = new FakeCamera();
+    camera.probe = async () => {
+      probeCalls += 1;
+      if (probeCalls === 1) return true;
+      return new Promise<boolean>(() => undefined);
+    };
+    services.camera = camera;
+    services.preflight = {
+      readStatus: async () => {
+        preflightCalls += 1;
+        if (preflightCalls === 1) return runtimeReadyStatus();
+        return new Promise<RuntimePreflightStatus>(() => undefined);
+      },
+    };
+    render(<App services={services} />);
+
+    await flushReact();
+    expect(screen.getByRole("button", { name: "체험 시작" })).toBeVisible();
+    fireEvent.click(screen.getByRole("button", { name: "처음으로" }));
+    fireEvent.click(screen.getByRole("button", { name: "확인" }));
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(2_999);
+    });
+
+    expect(screen.getByRole("alert")).toBeVisible();
+    expect(screen.getAllByRole("button").map((button) => button.textContent)).toEqual([
+      "다시 시도",
+      "처음으로",
+    ]);
+  });
+
+  it("starts a fresh preflight lifecycle when the services object changes", async () => {
+    const firstServices = createFakeServices();
+    firstServices.preflight = { readStatus: async () => new Promise<RuntimePreflightStatus>(() => undefined) };
+    const { rerender } = render(<App services={firstServices} />);
+    const replacementServices = createFakeServices();
+
+    rerender(<App services={replacementServices} />);
+
+    expect(await screen.findByRole("button", { name: "체험 시작" })).toBeVisible();
+  });
+
+  it("keeps a stale preflight URL from replacing the validated delivery URL", async () => {
+    const user = userEvent.setup();
+    const services = createFakeServices();
+    const stale = deferred<RuntimePreflightStatus>();
+    const fresh = {
+      ...runtimeReadyStatus(),
+      tunnel: { state: "healthy" as const, publicUrl: "https://fresh.example", latencyMs: 12, error: null },
+    };
+    let publicUrl: string | null = null;
+    let reads = 0;
+    services.getPublicUrl = () => publicUrl;
+    services.preflight = {
+      readStatus: async () => {
+        reads += 1;
+        if (reads === 1) {
+          const result = await stale.promise;
+          publicUrl = result.tunnel.publicUrl;
+          return result;
+        }
+        publicUrl = fresh.tunnel.publicUrl;
+        return fresh;
+      },
+    };
+    const issue = vi.fn(async (_input: Parameters<AppServices["delivery"]["issue"]>[0]) => issuedSession());
+    services.delivery = { issue };
+    render(<App services={services} />);
+
+    await reset(user);
+    expect(await screen.findByRole("button", { name: "체험 시작" })).toBeVisible();
+    stale.resolve({
+      ...runtimeReadyStatus(),
+      tunnel: { state: "healthy", publicUrl: "https://stale.example", latencyMs: 12, error: null },
+    });
+    await act(async () => undefined);
+
+    await startAndReachFrame(user, services);
+    await user.click(screen.getByRole("button", { name: "이 프레임으로 사진 만들기" }));
+    await waitFor(() => expect(issue).toHaveBeenCalledOnce());
+    const [deliveryInput] = issue.mock.calls[0]!;
+    expect(deliveryInput.publicBaseUrl).toBe("https://fresh.example");
+  });
+
+  it("reissues retained sessions only after a new public URL passes preflight", async () => {
+    const user = userEvent.setup();
+    const services = createFakeServices();
+    const oldStatus = {
+      ...runtimeReadyStatus(),
+      tunnel: { state: "healthy" as const, publicUrl: "https://old.example", latencyMs: 12, error: null },
+    };
+    const newStatus = {
+      ...runtimeReadyStatus(),
+      tunnel: { state: "healthy" as const, publicUrl: "https://new.example", latencyMs: 12, error: null },
+    };
+    let reads = 0;
+    services.preflight = { readStatus: async () => (++reads === 1 ? oldStatus : newStatus) };
+    services.registry.add(issuedSession(), "retained-key");
+    const reissue = vi.spyOn(services.registry, "reissueAll");
+    render(<App services={services} />);
+
+    await screen.findByRole("button", { name: "체험 시작" });
+    await reset(user);
+
+    expect(await screen.findByRole("button", { name: "체험 시작" })).toBeVisible();
+    expect(reissue).toHaveBeenCalledExactlyOnceWith("https://new.example");
   });
 });
 

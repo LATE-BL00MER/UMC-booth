@@ -24,6 +24,8 @@ import type { PrivateApiClient } from "./delivery/private-api-client.js";
 import type { BrowserCompositor } from "./frames/browser-compositor.js";
 import type { FrameManifest } from "./frames/frame-contract.js";
 
+const RESET_COMPLETION_TIMEOUT_MS = 2_500;
+
 export interface RuntimePreflightStatus {
   tunnel: PreflightStatus["tunnel"];
   lastSuccessfulSweepAt: number | null;
@@ -52,7 +54,9 @@ export function App({ services }: { services: AppServices }) {
   const [state, reactDispatch] = useReducer(boothReducer, undefined, initialBoothState);
   const stateRef = useRef<BoothState>(state);
   const currentAbortController = useRef(new AbortController());
+  const validatedPublicUrl = useRef<string | null>(null);
   const mounted = useRef(true);
+  const mountedServices = useRef<AppServices | null>(null);
   const resetPromise = useRef<Promise<void> | null>(null);
   const [preflightStatus, setPreflightStatus] = useState<PreflightStatus | null>(null);
 
@@ -82,13 +86,18 @@ export function App({ services }: { services: AppServices }) {
         lastSuccessfulSweepAt: runtimeStatus.lastSuccessfulSweepAt,
         framePackValid: hasValidFramePack(services.frames),
         loadedPoseCount: services.prompts.filter((prompt) => prompt.trim().length > 0).length,
-        joinUrlConfigured: services.getPublicUrl() !== null,
+        joinUrlConfigured: runtimeStatus.tunnel.state === "healthy" && runtimeStatus.tunnel.publicUrl !== null,
         activeCiphertextCount: runtimeStatus.activeCiphertextCount,
       };
       if (!mounted.current || currentAbortController.current !== controller) return;
 
       setPreflightStatus(status);
       if (getPreflightReadiness(status, Date.now())) {
+        const publicUrl = runtimeStatus.tunnel.publicUrl;
+        if (publicUrl !== null && validatedPublicUrl.current !== null && validatedPublicUrl.current !== publicUrl) {
+          services.registry.reissueAll(publicUrl);
+        }
+        validatedPublicUrl.current = publicUrl;
         dispatch({ type: "PREFLIGHT_SUCCEEDED", generation });
       } else {
         dispatch({ type: "PREFLIGHT_FAILED", generation, message: "운영 준비 상태를 확인할 수 없습니다" });
@@ -109,16 +118,17 @@ export function App({ services }: { services: AppServices }) {
       const currentState = stateRef.current;
       revokePreviews(currentState);
       if (currentState.pendingSessionId !== null) {
-        try {
-          await services.api.deletePending(currentState.pendingSessionId);
-        } catch {
-          // The server endpoint is idempotent. Reset still must return the kiosk to a usable state.
-        }
+        discardPending(services.api, currentState.pendingSessionId);
       }
 
       dispatch({ type: "RESET_CONFIRMED" });
       currentAbortController.current = new AbortController();
-      await runPreflight();
+      const controller = currentAbortController.current;
+      const completed = await completesBefore(runPreflight(), RESET_COMPLETION_TIMEOUT_MS);
+      if (!completed && currentAbortController.current === controller) {
+        controller.abort();
+        dispatch({ type: "PREFLIGHT_FAILED", generation: stateRef.current.generation, message: "운영 준비 상태를 확인할 수 없습니다" });
+      }
     })();
     resetPromise.current = teardown;
     try {
@@ -149,7 +159,7 @@ export function App({ services }: { services: AppServices }) {
       });
       if (controller.signal.aborted || currentAbortController.current !== controller) return;
 
-      const publicBaseUrl = services.getPublicUrl();
+      const publicBaseUrl = validatedPublicUrl.current;
       if (publicBaseUrl === null) throw new Error("Public delivery URL is unavailable");
       const issued = await services.delivery.issue({
         jpeg,
@@ -186,6 +196,15 @@ export function App({ services }: { services: AppServices }) {
   }, [dispatch, resetCurrentSession, startDelivery]);
 
   useEffect(() => {
+    const servicesWereReplaced = mountedServices.current !== null && mountedServices.current !== services;
+    mounted.current = true;
+    if (currentAbortController.current.signal.aborted) {
+      currentAbortController.current = new AbortController();
+    }
+    if (servicesWereReplaced && stateRef.current.phase !== "preflight") {
+      dispatch({ type: "RESET_CONFIRMED" });
+    }
+    mountedServices.current = services;
     void runPreflight();
     return () => {
       mounted.current = false;
@@ -194,7 +213,7 @@ export function App({ services }: { services: AppServices }) {
       const currentState = stateRef.current;
       revokePreviews(currentState);
       if (currentState.pendingSessionId !== null) {
-        void services.api.deletePending(currentState.pendingSessionId).catch(() => undefined);
+        discardPending(services.api, currentState.pendingSessionId);
       }
     };
   }, [runPreflight, services]);
@@ -322,6 +341,26 @@ function revokePreviews(state: BoothState): void {
 
 function isAbortError(error: unknown): boolean {
   return error instanceof DOMException && error.name === "AbortError";
+}
+
+function completesBefore(promise: Promise<void>, timeoutMs: number): Promise<boolean> {
+  return new Promise((resolve) => {
+    let settled = false;
+    const timer = setTimeout(() => finish(false), timeoutMs);
+    const finish = (completed: boolean) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolve(completed);
+    };
+    void promise.then(() => finish(true), () => finish(true));
+  });
+}
+
+function discardPending(api: PrivateApiClient, id: string): void {
+  void Promise.resolve()
+    .then(() => api.deletePending(id))
+    .catch(() => undefined);
 }
 
 function assertNever(value: never): never {

@@ -135,6 +135,19 @@ describe("private server", () => {
     expect(activated.body).not.toContain("http");
   });
 
+  it("returns activation recovery details only after the private session is active", async () => {
+    const context = await createPrivateApp();
+    apps.push(context.app);
+    const pending = await context.store.createPending(new Uint8Array([1]));
+
+    expect((await context.app.inject({ method: "GET", url: `/api/sessions/${pending.id}/activation` })).statusCode).toBe(404);
+    const active = await context.store.activate(pending.id);
+    const recovered = await context.app.inject({ method: "GET", url: `/api/sessions/${pending.id}/activation` });
+
+    expect(recovered.statusCode).toBe(200);
+    expect(recovered.json()).toEqual(active);
+  });
+
   it("deletes pending sessions idempotently and refuses active session deletion", async () => {
     const context = await createPrivateApp();
     apps.push(context.app);

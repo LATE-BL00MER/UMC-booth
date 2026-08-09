@@ -2,6 +2,7 @@ import { createRoot } from "react-dom/client";
 
 import { App, type AppServices, type RuntimePreflightStatus } from "./App.js";
 import { BrowserCameraPort } from "./camera/camera-port.js";
+import { BootstrapShell } from "./components/BootstrapShell.js";
 import { MemoryIssuedSessionRegistry } from "./delivery/issued-session-registry.js";
 import { EncryptedDeliveryCoordinator } from "./delivery/delivery-coordinator.js";
 import { FetchPrivateApiClient } from "./delivery/private-api-client.js";
@@ -14,16 +15,21 @@ if (!root) {
   throw new Error("Operator root is missing");
 }
 
-void bootstrap(root).catch(() => {
-  createRoot(root).render(<p role="alert">운영 화면을 준비하지 못했습니다</p>);
-});
+const applicationRoot = createRoot(root);
 
-async function bootstrap(rootElement: Element): Promise<void> {
+applicationRoot.render(
+  <BootstrapShell
+    load={loadBrowserServices}
+    onReady={(services) => applicationRoot.render(<App services={services} />)}
+  />,
+);
+
+async function loadBrowserServices(): Promise<AppServices> {
   const [frames, prompts] = await Promise.all([
     loadOperatorFrames(),
     loadOperatorPrompts(),
   ]);
-  createRoot(rootElement).render(<App services={createBrowserServices(frames, prompts)} />);
+  return createBrowserServices(frames, prompts);
 }
 
 async function loadOperatorFrames() {
@@ -46,7 +52,6 @@ function createBrowserServices(
 ): AppServices {
   const registry = new MemoryIssuedSessionRegistry();
   const api = new FetchPrivateApiClient();
-  let publicUrl: string | null = null;
 
   return {
     camera: new BrowserCameraPort(),
@@ -57,13 +62,14 @@ function createBrowserServices(
     frames,
     prompts,
     countdownTickMs: 1_000,
-    getPublicUrl: () => publicUrl,
+    // Delivery consumes App's controller-validated preflight URL. This retained member keeps
+    // the injected service shape backwards-compatible without storing a stale closure here.
+    getPublicUrl: () => null,
     preflight: {
       readStatus: async (signal) => {
         const response = await fetch("/api/status", { signal });
         if (!response.ok) throw new Error("Could not read runtime status");
         const status = parseRuntimeStatus(await response.json());
-        publicUrl = status.publicUrl;
         return {
           tunnel: {
             state: status.tunnel,
