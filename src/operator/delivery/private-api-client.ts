@@ -10,7 +10,7 @@ export type ActivationResolution =
   | { status: "deleted" };
 
 export class FetchPrivateApiClient implements PrivateApiClient {
-  constructor(private readonly fetchFn: typeof fetch = fetch) {}
+  constructor(private readonly fetchFn: typeof fetch = fetch.bind(globalThis)) {}
 
   async createPending(ciphertext: Uint8Array, signal: AbortSignal): Promise<{ id: string }> {
     const body = new ArrayBuffer(ciphertext.byteLength);

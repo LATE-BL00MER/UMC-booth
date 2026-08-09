@@ -55,6 +55,11 @@ export function buildPrivateServer(deps: PrivateServerDependencies): FastifyInst
 
   app.get("/api/status", async () => deps.runtimeStatus.getStatus());
 
+  app.get("/api/operator-config", async () => ({
+    countdownTickMs: deps.config.countdownTickMs,
+    exposeDeliveryUrl: deps.config.nodeEnv === "test",
+  }));
+
   app.post("/api/sessions", async (request, reply) => {
     if (!(await deps.runtimeStatus.getStatus()).acceptingCaptures) {
       return sendSafeError(reply, 503);

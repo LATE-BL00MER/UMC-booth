@@ -1,6 +1,6 @@
 {
   "id": "basic",
-  "label": "Basic grid",
+  "label": "기본 프레임",
   "canvas": { "width": 1200, "height": 1800 },
   "jpegQuality": 0.92,
   "thumbnail": "overlay.svg",

@@ -49,6 +49,7 @@ export interface AppServices {
   frames: FrameManifest[];
   prompts: [string, string, string, string, string, string];
   countdownTickMs: number;
+  exposeDeliveryUrl?: boolean;
   getPublicUrl(): string | null;
   preflight: PreflightPort;
 }
@@ -358,7 +359,7 @@ function renderPhase({
     case "qr":
       return state.issuedSession === null
         ? <ErrorScreen onRetry={onRetry} />
-        : <QrScreen issued={state.issuedSession} />;
+        : <QrScreen issued={state.issuedSession} exposeDeliveryUrl={services.exposeDeliveryUrl ?? false} />;
     case "error":
       return <ErrorScreen onRetry={onRetry} />;
     default:

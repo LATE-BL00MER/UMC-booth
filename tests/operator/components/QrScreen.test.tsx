@@ -40,6 +40,13 @@ describe("QrScreen", () => {
     expect(screen.getByText("팀원 모두 각자 스캔할 수 있습니다")).toBeVisible();
   });
 
+  it("keeps the delivery URL out of the production QR screen", async () => {
+    render(<QrScreen issued={issued} />);
+    await act(async () => undefined);
+
+    expect(screen.queryByTestId("delivery-url")).not.toBeInTheDocument();
+  });
+
   it("counts down to zero", () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date(1_800_000_059_000));

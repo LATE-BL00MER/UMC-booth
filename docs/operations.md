@@ -1,0 +1,73 @@
+# UMC Photo Booth event operations runbook
+
+## Install and start
+
+Use the event MacBook with Node.js 22 or later. Install the project dependencies and the tunnel client before the event:
+
+```bash
+node --version
+npm ci
+brew install cloudflared
+```
+
+Do not commit the real application URL. At startup, enter the event HTTPS join URL directly in the terminal:
+
+```bash
+read "JOIN_SITE_URL?가입 사이트 HTTPS URL: "
+export JOIN_SITE_URL
+npm run booth
+```
+
+Keep this terminal open. Confirm the operator page is available only on the Mac and that the public listener `/health` returns `{"ok":true}` through the tunnel.
+
+## Before doors open
+
+Confirm all of the following:
+
+- Mac power is connected; sleep is disabled; Do Not Disturb is enabled.
+- The camera framing fits a 1–4-person team, with consistent lighting and a clear standing position.
+- The six on-screen pose prompts are correct and staff have practiced them.
+- The selected frame pack is the approved event frame pack.
+- Local storage has enough free capacity for the operating system, build output, and temporary encrypted session data.
+- The front sign reads `친구와 무료 네컷 촬영 · 휴대폰으로 바로 저장`.
+- The front-sign subcopy reads `앱 설치 없음 · 사진은 10분 후 삭제`.
+
+## Staff script and normal team flow
+
+Invite teams of 1–4 people: “친구와 무료 네컷 촬영 · 휴대폰으로 바로 저장.” Ask everyone to confirm consent on the operator screen. Guide them through six poses, then let them select four photos in their preferred order and choose a frame.
+
+When the QR is issued, tell every team member to scan the same QR with their own phone. They can independently open and save the same completed photo during the ten-minute timer. Never display a participant’s live camera view or completed photo anywhere other than the operator screen.
+
+The recipient must choose **사진 저장하기** before the application CTA appears. Do not promise that a QR remains valid beyond its displayed timer.
+
+## Network and device rehearsal
+
+Before the event, test an issued QR from both iPhone Safari and Android Chrome using cellular data, not the Mac Wi-Fi. Confirm the photo preview loads, photo saving starts, and the application CTA appears only after the save action.
+
+Run 10 consecutive team rehearsals. Record capture-to-QR duration, download success, memory behavior, and any previous-photo leakage. Mark a rehearsal failed if any of these occur:
+
+- Capture-to-QR exceeds four minutes.
+- Recipient preview takes more than five seconds on working cellular data.
+- A plaintext photo appears on disk.
+- Reset takes more than three seconds.
+- A previous team’s photo appears in the next session.
+
+The following real-hardware checks are **unperformed until completed on the actual event MacBook**: the iPhone Safari cellular rehearsal, Android Chrome cellular rehearsal, ten consecutive team rehearsal, tunnel-loss recovery rehearsal, and final physical shutdown rehearsal. Record the device model, browser version, mobile carrier, date, operator, result, and any corrective action in the event log.
+
+## Tunnel-down recovery
+
+If the tunnel health check fails, stop new captures immediately. Wait for the runtime to obtain its automatic replacement public URL, then reissue the current team’s QR from the operator screen. From a cellular-connected phone, verify `<public-url>/health` before allowing the next team to start. Do not promise an old QR will work after the replacement URL is issued.
+
+## Reset and privacy checks
+
+Use the upper-right `처음으로` control only after confirming the current team is finished or has asked to start over. A reset clears the current unissued work but does not invalidate an already-issued QR; the issued team can still download until its timer expires.
+
+During rehearsals and hourly during the event, inspect the configured session directory. It must contain only ciphertext and metadata—never JPEG/plaintext image files. Do not copy or export session files, QR URLs, or photos for debugging.
+
+## Shutdown
+
+At closing, block new teams and let the final team’s ten-minute timer finish. Choose `운영 종료 및 전체 삭제`, confirm the operator has completed deletion, and verify that the session directory is empty. Only then stop the booth process and power/network equipment.
+
+## After the event
+
+Record aggregate counts only: team starts, completed QRs, successful decryptions, save intents, join clicks, and UTM visits. Compare the relevant rates against the 90% team-start-to-completed-QR target, the 95% successful-decryption target, and the 30% join-click target. Do not export photos, session identifiers, or any recipient-level records.

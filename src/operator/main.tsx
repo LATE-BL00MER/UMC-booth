@@ -25,11 +25,12 @@ applicationRoot.render(
 );
 
 async function loadBrowserServices(): Promise<AppServices> {
-  const [frames, prompts] = await Promise.all([
+  const [frames, prompts, runtimeConfig] = await Promise.all([
     loadOperatorFrames(),
     loadOperatorPrompts(),
+    loadOperatorRuntimeConfig(),
   ]);
-  return createBrowserServices(frames, prompts);
+  return createBrowserServices(frames, prompts, runtimeConfig);
 }
 
 async function loadOperatorFrames() {
@@ -46,9 +47,20 @@ async function loadOperatorPrompts(): Promise<[string, string, string, string, s
   return prompts as [string, string, string, string, string, string];
 }
 
+async function loadOperatorRuntimeConfig(): Promise<{ countdownTickMs: number; exposeDeliveryUrl: boolean }> {
+  const response = await fetch("/api/operator-config");
+  if (!response.ok) throw new Error("Could not load operator runtime config");
+  const value: unknown = await response.json();
+  if (!isRecord(value) || !isPositiveInteger(value.countdownTickMs) || typeof value.exposeDeliveryUrl !== "boolean") {
+    throw new Error("Operator runtime config is malformed");
+  }
+  return { countdownTickMs: value.countdownTickMs, exposeDeliveryUrl: value.exposeDeliveryUrl };
+}
+
 function createBrowserServices(
   frames: Awaited<ReturnType<typeof loadOperatorFrames>>,
   prompts: [string, string, string, string, string, string],
+  runtimeConfig: { countdownTickMs: number; exposeDeliveryUrl: boolean },
 ): AppServices {
   const registry = new MemoryIssuedSessionRegistry();
   const api = new FetchPrivateApiClient();
@@ -61,7 +73,8 @@ function createBrowserServices(
     api,
     frames,
     prompts,
-    countdownTickMs: 1_000,
+    countdownTickMs: runtimeConfig.countdownTickMs,
+    exposeDeliveryUrl: runtimeConfig.exposeDeliveryUrl,
     // Delivery consumes App's controller-validated preflight URL. This retained member keeps
     // the injected service shape backwards-compatible without storing a stale closure here.
     getPublicUrl: () => null,
@@ -136,4 +149,8 @@ function isNullableNumber(value: unknown): value is number | null {
 
 function isNonNegativeInteger(value: unknown): value is number {
   return typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
+}
+
+function isPositiveInteger(value: unknown): value is number {
+  return typeof value === "number" && Number.isSafeInteger(value) && value > 0;
 }

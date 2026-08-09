@@ -5,9 +5,10 @@ import type { IssuedSession } from "../../shared/contracts.js";
 
 export interface QrScreenProps {
   issued: IssuedSession;
+  exposeDeliveryUrl?: boolean;
 }
 
-export function QrScreen({ issued }: QrScreenProps) {
+export function QrScreen({ issued, exposeDeliveryUrl = false }: QrScreenProps) {
   const [qrDataUrl, setQrDataUrl] = useState<string | null>(null);
   const [qrError, setQrError] = useState(false);
   const [renderAttempt, setRenderAttempt] = useState(0);
@@ -49,6 +50,7 @@ export function QrScreen({ issued }: QrScreenProps) {
       ) : (
         <img src={qrDataUrl} alt="사진 받기 QR 코드" />
       )}
+      {exposeDeliveryUrl ? <span data-testid="delivery-url" data-url={issued.deliveryUrl} hidden /> : null}
       <output aria-live="polite">{formatRemaining(remaining)}</output>
       <p>팀원 모두 각자 스캔할 수 있습니다</p>
     </section>
