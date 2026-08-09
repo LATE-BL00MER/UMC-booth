@@ -67,6 +67,24 @@ interface StartupContext {
   cancel(): void;
 }
 
+interface TunnelStartOwnership {
+  epoch: number;
+  settled: boolean;
+}
+
+interface StartTransition {
+  kind: "starting";
+  promise: Promise<void>;
+}
+
+interface StopTransition {
+  kind: "stopping";
+  promise: Promise<void>;
+  purgeRequested: boolean;
+}
+
+type LifecycleTransition = StartTransition | StopTransition;
+
 type OperationOutcome<T> =
   | { status: "fulfilled"; value: T }
   | { status: "rejected" };
@@ -105,17 +123,21 @@ export function createRuntime(deps: RuntimeDependencies): EventRuntime {
   let acceptingCaptures = false;
   let shutdownRequested = false;
   let signalHandlersInstalled = false;
-  let startupPromise: Promise<void> | null = null;
   let startupContext: StartupContext | null = null;
   let shutdownPromise: Promise<void> | null = null;
-  let tunnelCleanupRequired = false;
+  let lifecycleTransition: LifecycleTransition | null = null;
+  let nextTunnelStartEpoch = 0;
   const pendingLifecycleWork = new Set<Promise<unknown>>();
   const serverCloseOperations = new WeakMap<RuntimeServer, Promise<boolean>>();
+  const tunnelStartOwnerships = new Set<TunnelStartOwnership>();
 
   const runtime: EventRuntime = {
     start() {
+      if (lifecycleTransition?.kind === "starting") return lifecycleTransition.promise;
+      if (lifecycleTransition?.kind === "stopping") {
+        return Promise.reject(new Error("Runtime stop is in progress"));
+      }
       if (started) return Promise.resolve();
-      if (startupPromise !== null) return startupPromise;
       if (sweepQueueOwner !== null || pendingLifecycleWork.size > 0) {
         return Promise.reject(new Error("Runtime lifecycle work is still pending"));
       }
@@ -131,11 +153,13 @@ export function createRuntime(deps: RuntimeDependencies): EventRuntime {
       const context = createStartupContext(generation);
       startupContext = context;
 
-      const starting = startRuntime(context).finally(() => {
-        if (startupPromise === starting) startupPromise = null;
+      let transition!: StartTransition;
+      const starting = Promise.resolve().then(() => startRuntime(context)).finally(() => {
+        if (lifecycleTransition === transition) lifecycleTransition = null;
         if (startupContext === context) startupContext = null;
       });
-      startupPromise = starting;
+      transition = { kind: "starting", promise: starting };
+      lifecycleTransition = transition;
       return starting;
     },
 
@@ -160,48 +184,23 @@ export function createRuntime(deps: RuntimeDependencies): EventRuntime {
       };
     },
 
-    async stop(options: { purge: boolean }): Promise<void> {
-      startupContext?.cancel();
-      runtimeGeneration += 1;
-      shutdownRequested = true;
-      acceptingCaptures = false;
-      started = false;
-      removeSignalHandlers();
-      if (sweepTimer !== null) {
-        timers.clearInterval(sweepTimer);
-        sweepTimer = null;
+    stop(options: { purge: boolean }): Promise<void> {
+      if (lifecycleTransition?.kind === "stopping") {
+        lifecycleTransition.purgeRequested ||= options.purge;
+        return lifecycleTransition.promise;
       }
-      await Promise.resolve();
-      const inheritedLifecycleWork = [...pendingLifecycleWork];
-      const errors: unknown[] = [];
-      const ownedSweep = sweepQueueOwner;
-      await attempt(() => ownedSweep?.promise ?? sweepQueue, "queued sweep", errors);
-      if (options.purge) {
-        await attempt(() => deps.store.purgeAll(), "initial purge", errors);
-      }
-      await stopTunnel("tunnel stop", errors);
-      if (inheritedLifecycleWork.length > 0) {
-        await attempt(
-          () => Promise.all(inheritedLifecycleWork),
-          "pending lifecycle work",
-          errors,
-        );
-      }
-      if (privateServer !== null) {
-        await closeServer(privateServer, "private", "private listener close", errors);
-      }
-      if (options.purge) {
-        await attempt(() => deps.store.purgeAll(), "definitive purge", errors);
-      }
-      if (publicServer !== null) {
-        await closeServer(publicServer, "public", "public listener close", errors);
-      }
-      if (deps.metrics) {
-        await attempt(() => deps.metrics!.drainPersistence(), "metrics drain", errors);
-      }
-      if (errors.length > 0) {
-        throw new AggregateError(errors, "Runtime shutdown was incomplete");
-      }
+      const starting = lifecycleTransition?.kind === "starting"
+        ? lifecycleTransition.promise
+        : null;
+      let transition!: StopTransition;
+      const stopping = Promise.resolve()
+        .then(() => stopRuntime(transition, starting))
+        .finally(() => {
+          if (lifecycleTransition === transition) lifecycleTransition = null;
+        });
+      transition = { kind: "stopping", promise: stopping, purgeRequested: options.purge };
+      lifecycleTransition = transition;
+      return stopping;
     },
 
     requestShutdown(): Promise<void> {
@@ -219,9 +218,68 @@ export function createRuntime(deps: RuntimeDependencies): EventRuntime {
     },
   };
 
+  async function stopRuntime(
+    transition: StopTransition,
+    starting: Promise<void> | null,
+  ): Promise<void> {
+      startupContext?.cancel();
+      runtimeGeneration += 1;
+      shutdownRequested = true;
+      acceptingCaptures = false;
+      started = false;
+      removeSignalHandlers();
+      if (sweepTimer !== null) {
+        timers.clearInterval(sweepTimer);
+        sweepTimer = null;
+      }
+      const errors: unknown[] = [];
+      if (starting !== null) {
+        await attempt(
+          () => starting.then(() => undefined, () => undefined),
+          "startup cancellation",
+          errors,
+        );
+      }
+      await Promise.resolve();
+      const inheritedLifecycleWork = [...pendingLifecycleWork];
+      const ownedSweep = sweepQueueOwner;
+      await attempt(() => ownedSweep?.promise ?? sweepQueue, "queued sweep", errors);
+      if (transition.purgeRequested) {
+        await attempt(() => deps.store.purgeAll(), "initial purge", errors);
+      }
+      await stopTunnel("tunnel stop", errors);
+      if (inheritedLifecycleWork.length > 0) {
+        await attempt(
+          () => Promise.all(inheritedLifecycleWork),
+          "pending lifecycle work",
+          errors,
+        );
+      }
+      if (privateServer !== null) {
+        await closeServer(privateServer, "private", "private listener close", errors);
+      }
+      let definitivePurgePerformed = false;
+      if (transition.purgeRequested) {
+        await attempt(() => deps.store.purgeAll(), "definitive purge", errors);
+        definitivePurgePerformed = true;
+      }
+      if (publicServer !== null) {
+        await closeServer(publicServer, "public", "public listener close", errors);
+      }
+      if (deps.metrics) {
+        await attempt(() => deps.metrics!.drainPersistence(), "metrics drain", errors);
+      }
+      if (transition.purgeRequested && !definitivePurgePerformed) {
+        await attempt(() => deps.store.purgeAll(), "upgraded definitive purge", errors);
+      }
+      if (errors.length > 0) {
+        throw new AggregateError(errors, "Runtime shutdown was incomplete");
+      }
+  }
+
   async function startRuntime(context: StartupContext): Promise<void> {
     const retainedCleanupErrors: unknown[] = [];
-    if (tunnelCleanupRequired) {
+    if (tunnelStartOwnerships.size > 0) {
       await stopTunnel("retained tunnel stop", retainedCleanupErrors);
     }
     if (privateServer !== null) {
@@ -230,7 +288,7 @@ export function createRuntime(deps: RuntimeDependencies): EventRuntime {
     if (publicServer !== null) {
       await closeServer(publicServer, "public", "retained public listener close", retainedCleanupErrors);
     }
-    if (tunnelCleanupRequired || privateServer !== null || publicServer !== null || retainedCleanupErrors.length > 0) {
+    if (tunnelStartOwnerships.size > 0 || privateServer !== null || publicServer !== null || retainedCleanupErrors.length > 0) {
       removeSignalHandlers();
       throw new AggregateError(retainedCleanupErrors, "Runtime retained cleanup was incomplete");
     }
@@ -265,13 +323,26 @@ export function createRuntime(deps: RuntimeDependencies): EventRuntime {
       assertStartupActive(context.generation);
       privateServer = privateCandidate;
 
-      tunnelCleanupRequired = true;
-      await runPreflightStep(
+      const tunnelOwnership: TunnelStartOwnership = {
+        epoch: ++nextTunnelStartEpoch,
+        settled: false,
+      };
+      tunnelStartOwnerships.add(tunnelOwnership);
+      const tunnelStarted = await runPreflightStep(
         context,
         "tunnel startup",
-        () => tunnel.start(`http://${loopbackHost}:${deps.config.publicPort}`),
-        closeLateTunnel,
+        async () => {
+          try {
+            await tunnel.start(`http://${loopbackHost}:${deps.config.publicPort}`);
+            return true;
+          } catch {
+            return false;
+          }
+        },
+        (startedLate) => settleLateTunnelStart(tunnelOwnership, startedLate),
       );
+      tunnelOwnership.settled = true;
+      if (!tunnelStarted) throw new Error("Public tunnel preflight failed");
       assertStartupActive(context.generation);
       const tunnelStatus = tunnel.status();
       if (tunnelStatus.state !== "healthy" || tunnelStatus.publicUrl === null) {
@@ -358,10 +429,14 @@ export function createRuntime(deps: RuntimeDependencies): EventRuntime {
     await closeServer(server, surface, `late ${surface} listener close`, errors);
   }
 
-  async function closeLateTunnel(): Promise<void> {
-    if (!tunnelCleanupRequired) return;
+  async function settleLateTunnelStart(ownership: TunnelStartOwnership, started: boolean): Promise<void> {
+    ownership.settled = true;
+    if (!started) {
+      tunnelStartOwnerships.delete(ownership);
+      return;
+    }
     const errors: unknown[] = [];
-    await stopTunnel("late tunnel stop", errors);
+    await stopTunnel(`late tunnel stop ${ownership.epoch}`, errors);
   }
 
   function runSweep(generation: number): Promise<void> {
@@ -493,14 +568,17 @@ export function createRuntime(deps: RuntimeDependencies): EventRuntime {
   }
 
   async function stopTunnel(label: string, errors: unknown[]): Promise<boolean> {
-    tunnelCleanupRequired = false;
+    const ownedSettledStarts = [...tunnelStartOwnerships].filter((ownership) => ownership.settled);
+    const clearOwnedSettledStarts = () => {
+      for (const ownership of ownedSettledStarts) tunnelStartOwnerships.delete(ownership);
+    };
     const stopped = await attempt(
       () => tunnel.stop(),
       label,
       errors,
-      () => { tunnelCleanupRequired = false; },
+      clearOwnedSettledStarts,
     );
-    tunnelCleanupRequired = !stopped;
+    if (stopped) clearOwnedSettledStarts();
     return stopped;
   }
 

@@ -349,6 +349,115 @@ describe("event runtime", () => {
     }
   });
 
+  it("owns a late tunnel start until a new final stop for that exact start settles", async () => {
+    vi.useFakeTimers();
+    const releaseLateStart = deferred<void>();
+    const releaseFinalStop = deferred<void>();
+    let tunnelStartCalls = 0;
+    let tunnelStopCalls = 0;
+    let tunnelStatus: TunnelStatus = { state: "down", publicUrl: null, latencyMs: null, error: null };
+    const harness = createHarness({
+      tunnel: {
+        start: async () => {
+          tunnelStartCalls += 1;
+          tunnelStatus = { state: "starting", publicUrl: null, latencyMs: null, error: null };
+          if (tunnelStartCalls === 1) await releaseLateStart.promise;
+          tunnelStatus = { state: "healthy", publicUrl: "https://booth.example", latencyMs: 1, error: null };
+        },
+        stop: async () => {
+          tunnelStopCalls += 1;
+          if (tunnelStopCalls === 2) await releaseFinalStop.promise;
+          tunnelStatus = { state: "down", publicUrl: null, latencyMs: null, error: null };
+        },
+        status: () => ({ ...tunnelStatus }),
+      },
+      timers: undefined,
+      safetyStepTimeoutMs: 10,
+      startupStepTimeoutMs: 20,
+    });
+    const runtime = createRuntime(harness.dependencies);
+
+    try {
+      const starting = runtime.start();
+      const startupFailure = starting.catch((error: unknown) => error);
+      await vi.advanceTimersByTimeAsync(20);
+      expect(await startupFailure).toMatchObject({ message: "Runtime startup failed" });
+      expect(tunnelStopCalls).toBe(1);
+
+      releaseLateStart.resolve();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(tunnelStopCalls).toBe(2);
+      await expect(runtime.start()).rejects.toThrow("lifecycle work is still pending");
+
+      releaseFinalStop.resolve();
+      await vi.advanceTimersByTimeAsync(0);
+      await runtime.start();
+      expect(tunnelStartCalls).toBe(2);
+      expect((await runtime.getStatus()).acceptingCaptures).toBe(true);
+      await runtime.stop({ purge: false });
+    } finally {
+      releaseLateStart.resolve();
+      releaseFinalStop.resolve();
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not let an older in-flight stop clear ownership after the required late stop fails", async () => {
+    vi.useFakeTimers();
+    const releaseLateStart = deferred<void>();
+    const releaseOlderStop = deferred<void>();
+    let tunnelStartCalls = 0;
+    let tunnelStopCalls = 0;
+    let tunnelStatus: TunnelStatus = { state: "down", publicUrl: null, latencyMs: null, error: null };
+    const harness = createHarness({
+      tunnel: {
+        start: async () => {
+          tunnelStartCalls += 1;
+          if (tunnelStartCalls === 1) await releaseLateStart.promise;
+          tunnelStatus = { state: "healthy", publicUrl: "https://booth.example", latencyMs: 1, error: null };
+        },
+        stop: async () => {
+          tunnelStopCalls += 1;
+          const call = tunnelStopCalls;
+          if (call === 1) await releaseOlderStop.promise;
+          if (call === 2 || call === 3) throw new Error("stop failed");
+          tunnelStatus = { state: "down", publicUrl: null, latencyMs: null, error: null };
+        },
+        status: () => ({ ...tunnelStatus }),
+      },
+      timers: undefined,
+      safetyStepTimeoutMs: 10,
+      startupStepTimeoutMs: 20,
+    });
+    const runtime = createRuntime(harness.dependencies);
+
+    try {
+      const starting = runtime.start();
+      const startupFailure = starting.catch((error: unknown) => error);
+      await vi.advanceTimersByTimeAsync(20);
+      expect(tunnelStopCalls).toBe(1);
+
+      releaseLateStart.resolve();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(tunnelStopCalls).toBe(2);
+      releaseOlderStop.resolve();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(await startupFailure).toMatchObject({ message: "Runtime startup failed" });
+
+      await expect(runtime.start()).rejects.toThrow("retained cleanup was incomplete");
+      expect(tunnelStopCalls).toBe(3);
+      expect(tunnelStartCalls).toBe(1);
+
+      await runtime.start();
+      expect(tunnelStopCalls).toBe(4);
+      expect(tunnelStartCalls).toBe(2);
+    } finally {
+      releaseLateStart.resolve();
+      releaseOlderStop.resolve();
+      vi.useRealTimers();
+    }
+  });
+
   it("routes a signal received during pending tunnel startup through purge and settles start", async () => {
     for (const signal of ["SIGINT", "SIGTERM"] as const) {
       const tunnelStartCalled = deferred<void>();
@@ -378,7 +487,14 @@ describe("event runtime", () => {
       expect(await startupFailure).toMatchObject({ message: "Runtime startup failed" });
       await runtime.requestShutdown();
 
-      expect(harness.order).toEqual(["store:purge-all", "tunnel:stop", "private:close", "store:purge-all", "public:close"]);
+      expect(harness.order).toEqual([
+        "store:purge-all",
+        "tunnel:stop",
+        "tunnel:stop",
+        "private:close",
+        "store:purge-all",
+        "public:close",
+      ]);
       expect(exit).toHaveBeenCalledWith(0);
       expect((await runtime.getStatus()).acceptingCaptures).toBe(false);
     }
@@ -727,6 +843,232 @@ describe("event runtime", () => {
 
     expect(harness.acceptingAtPurge()).toBe(false);
     expect(harness.order).toEqual(["store:purge-all", "tunnel:stop", "private:close", "store:purge-all", "public:close"]);
+  });
+
+  it("rejects start during an ordinary slow stop and permits a new generation only afterward", async () => {
+    const purgeStarted = deferred<void>();
+    const releasePurge = deferred<void>();
+    let purgeCalls = 0;
+    let initializeCalls = 0;
+    let publicListenCalls = 0;
+    let tunnelStartCalls = 0;
+    const harness = createHarness({
+      store: {
+        initialize: async () => { initializeCalls += 1; },
+        sweep: async () => ({ deletedPending: 0, deletedExpired: 0 }),
+        purgeAll: async () => {
+          purgeCalls += 1;
+          if (purgeCalls === 1) {
+            purgeStarted.resolve();
+            await releasePurge.promise;
+          }
+          return 0;
+        },
+        stats: async () => ({ pending: 0, active: 0, encryptedBytes: 0, lastSweepAt: 1_000 }),
+      },
+      createPublicServer: () => ({
+        listen: async () => { publicListenCalls += 1; return "http://127.0.0.1:4174"; },
+        close: async () => undefined,
+      }),
+      tunnel: {
+        start: async () => { tunnelStartCalls += 1; },
+        stop: async () => undefined,
+        status: () => ({ state: "healthy", publicUrl: "https://booth.example", latencyMs: 1, error: null }),
+      },
+    });
+    const runtime = createRuntime(harness.dependencies);
+
+    try {
+      await runtime.start();
+      const stopping = runtime.stop({ purge: true });
+      await purgeStarted.promise;
+
+      await expect(runtime.start()).rejects.toThrow("stop is in progress");
+      expect(initializeCalls).toBe(1);
+      expect(publicListenCalls).toBe(1);
+      expect(tunnelStartCalls).toBe(1);
+
+      releasePurge.resolve();
+      await stopping;
+      await runtime.start();
+      expect(initializeCalls).toBe(2);
+      expect(publicListenCalls).toBe(2);
+      expect(tunnelStartCalls).toBe(2);
+    } finally {
+      releasePurge.resolve();
+    }
+  });
+
+  it("coalesces concurrent direct stops without duplicate purge or component cleanup", async () => {
+    const purgeStarted = deferred<void>();
+    const releasePurge = deferred<void>();
+    let purgeCalls = 0;
+    let tunnelStopCalls = 0;
+    let privateCloseCalls = 0;
+    let publicCloseCalls = 0;
+    const harness = createHarness({
+      store: {
+        initialize: async () => undefined,
+        sweep: async () => ({ deletedPending: 0, deletedExpired: 0 }),
+        purgeAll: async () => {
+          purgeCalls += 1;
+          if (purgeCalls === 1) {
+            purgeStarted.resolve();
+            await releasePurge.promise;
+          }
+          return 0;
+        },
+        stats: async () => ({ pending: 0, active: 0, encryptedBytes: 0, lastSweepAt: 1_000 }),
+      },
+      createPublicServer: () => ({
+        listen: async () => "http://127.0.0.1:4174",
+        close: async () => { publicCloseCalls += 1; },
+      }),
+      createPrivateServer: () => ({
+        listen: async () => "http://127.0.0.1:4173",
+        close: async () => { privateCloseCalls += 1; },
+      }),
+      tunnel: {
+        start: async () => undefined,
+        stop: async () => { tunnelStopCalls += 1; },
+        status: () => ({ state: "healthy", publicUrl: "https://booth.example", latencyMs: 1, error: null }),
+      },
+    });
+    const runtime = createRuntime(harness.dependencies);
+
+    try {
+      await runtime.start();
+      const firstStop = runtime.stop({ purge: true });
+      await purgeStarted.promise;
+      const secondStop = runtime.stop({ purge: true });
+      releasePurge.resolve();
+      await Promise.all([firstStop, secondStop]);
+
+      expect(purgeCalls).toBe(2);
+      expect(tunnelStopCalls).toBe(1);
+      expect(privateCloseCalls).toBe(1);
+      expect(publicCloseCalls).toBe(1);
+    } finally {
+      releasePurge.resolve();
+    }
+  });
+
+  it("shares a single startup transition across concurrent start calls", async () => {
+    const initializeStarted = deferred<void>();
+    const releaseInitialize = deferred<void>();
+    let initializeCalls = 0;
+    let publicFactoryCalls = 0;
+    const harness = createHarness({
+      store: {
+        initialize: async () => {
+          initializeCalls += 1;
+          initializeStarted.resolve();
+          await releaseInitialize.promise;
+        },
+        sweep: async () => ({ deletedPending: 0, deletedExpired: 0 }),
+        purgeAll: async () => 0,
+        stats: async () => ({ pending: 0, active: 0, encryptedBytes: 0, lastSweepAt: 1_000 }),
+      },
+      createPublicServer: () => {
+        publicFactoryCalls += 1;
+        return {
+          listen: async () => "http://127.0.0.1:4174",
+          close: async () => undefined,
+        };
+      },
+    });
+    const runtime = createRuntime(harness.dependencies);
+
+    try {
+      const firstStart = runtime.start();
+      await initializeStarted.promise;
+      const secondStart = runtime.start();
+
+      expect(secondStart).toBe(firstStart);
+      releaseInitialize.resolve();
+      await Promise.all([firstStart, secondStart]);
+      expect(initializeCalls).toBe(1);
+      expect(publicFactoryCalls).toBe(1);
+    } finally {
+      releaseInitialize.resolve();
+      await runtime.stop({ purge: true }).catch(() => undefined);
+    }
+  });
+
+  it("lets stop cancel an in-progress start and permits a safe later restart", async () => {
+    const controlled = createControlledPreflightHarness("initialize");
+    const runtime = createRuntime(controlled.harness.dependencies);
+
+    const starting = runtime.start();
+    await controlled.reached;
+    const stopping = runtime.stop({ purge: true });
+
+    await expect(starting).rejects.toThrow("Runtime startup failed");
+    expect((await runtime.getStatus()).acceptingCaptures).toBe(false);
+    controlled.unblock();
+    await stopping;
+
+    await runtime.start();
+    expect(controlled.publicFactoryCalls()).toBe(1);
+    expect((await runtime.getStatus()).acceptingCaptures).toBe(true);
+  });
+
+  it("makes requestShutdown join an in-progress stop without duplicating cleanup", async () => {
+    const purgeStarted = deferred<void>();
+    const releasePurge = deferred<void>();
+    let purgeCalls = 0;
+    let tunnelStopCalls = 0;
+    let privateCloseCalls = 0;
+    let publicCloseCalls = 0;
+    const exit = vi.fn();
+    const harness = createHarness({
+      store: {
+        initialize: async () => undefined,
+        sweep: async () => ({ deletedPending: 0, deletedExpired: 0 }),
+        purgeAll: async () => {
+          purgeCalls += 1;
+          if (purgeCalls === 1) {
+            purgeStarted.resolve();
+            await releasePurge.promise;
+          }
+          return 0;
+        },
+        stats: async () => ({ pending: 0, active: 0, encryptedBytes: 0, lastSweepAt: 1_000 }),
+      },
+      createPublicServer: () => ({
+        listen: async () => "http://127.0.0.1:4174",
+        close: async () => { publicCloseCalls += 1; },
+      }),
+      createPrivateServer: () => ({
+        listen: async () => "http://127.0.0.1:4173",
+        close: async () => { privateCloseCalls += 1; },
+      }),
+      tunnel: {
+        start: async () => undefined,
+        stop: async () => { tunnelStopCalls += 1; },
+        status: () => ({ state: "healthy", publicUrl: "https://booth.example", latencyMs: 1, error: null }),
+      },
+      exit,
+    });
+    const runtime = createRuntime(harness.dependencies);
+
+    try {
+      await runtime.start();
+      const stopping = runtime.stop({ purge: true });
+      await purgeStarted.promise;
+      const shutdown = runtime.requestShutdown();
+      releasePurge.resolve();
+      await Promise.all([stopping, shutdown]);
+
+      expect(purgeCalls).toBe(2);
+      expect(tunnelStopCalls).toBe(1);
+      expect(privateCloseCalls).toBe(1);
+      expect(publicCloseCalls).toBe(1);
+      expect(exit).toHaveBeenCalledOnce();
+      expect(exit).toHaveBeenCalledWith(0);
+    } finally {
+      releasePurge.resolve();
+    }
   });
 
   it("purges again after the private listener drains an in-flight ciphertext write", async () => {
