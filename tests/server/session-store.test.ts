@@ -1,9 +1,9 @@
-import { mkdtemp, readFile, readdir, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, readdir, rename, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { formatPublicToken } from "../../src/shared/public-token";
-import { FileSessionStore } from "../../src/server/session-store";
+import { FileSessionStore, type SessionStoreFileSystem } from "../../src/server/session-store";
 
 async function createStore(now = 1_000) {
   const root = await mkdtemp(join(tmpdir(), "umc-store-"));
@@ -141,6 +141,65 @@ describe("FileSessionStore", () => {
     await expect(store.getActivated(pending.id)).resolves.toEqual(activated);
   });
 
+  it("does not recover an active session when its ciphertext is missing", async () => {
+    const { root, store } = await createStore();
+    const pending = await store.createPending(new Uint8Array([7, 8, 9]));
+    await store.activate(pending.id);
+    await rm(join(root, `${pending.id}.bin`));
+
+    await expect(store.getActivated(pending.id)).resolves.toBeNull();
+  });
+
+  it("does not leave active metadata without ciphertext when sweep interleaves activation", async () => {
+    const root = await mkdtemp(join(tmpdir(), "umc-store-sweep-race-"));
+    const time = { value: 1_000 };
+    const stalePendingRead = deferred<void>();
+    const continueSweep = deferred<void>();
+    let metadataPath = "";
+    let interceptPendingMetadataRead = true;
+    const fileSystem: SessionStoreFileSystem = {
+      mkdir,
+      readdir,
+      rename,
+      rm,
+      stat,
+      writeFile,
+      readFile: ((...args: Parameters<typeof readFile>) => readFile(...args).then(async (value) => {
+        if (interceptPendingMetadataRead && String(args[0]) === metadataPath) {
+          interceptPendingMetadataRead = false;
+          stalePendingRead.resolve();
+          await continueSweep.promise;
+        }
+        return value;
+      })) as typeof readFile,
+    };
+    const store = new FileSessionStore({
+      root,
+      clock: { now: () => time.value },
+      activeTtlMs: 600_000,
+      pendingTtlMs: 120_000,
+      fileSystem,
+    });
+    await store.initialize();
+    const pending = await store.createPending(new Uint8Array([4, 5, 6]));
+    time.value = 121_000;
+    metadataPath = join(root, `${pending.id}.json`);
+
+    try {
+      const sweeping = store.sweep();
+      await expect(settlesWithin(stalePendingRead.promise, 50)).resolves.toBeUndefined();
+      time.value = 120_999;
+      const activating = store.activate(pending.id);
+      continueSweep.resolve();
+
+      await expect(sweeping).resolves.toEqual({ deletedPending: 1, deletedExpired: 0 });
+      await expect(activating).rejects.toThrow("Session not found");
+      expect(await readdir(root)).toEqual([]);
+    } finally {
+      continueSweep.resolve();
+    }
+  });
+
   it("purges orphaned session artifacts left by interrupted atomic writes", async () => {
     const { root, store } = await createStore();
     const id = "AAAAAAAAAAAAAAAAAAAAAA";
@@ -151,3 +210,29 @@ describe("FileSessionStore", () => {
     expect(await readdir(root)).toEqual([]);
   });
 });
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise;
+    reject = rejectPromise;
+  });
+  return { promise, resolve, reject };
+}
+
+function settlesWithin<T>(promise: Promise<T>, milliseconds: number): Promise<T> {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error("Timed out waiting for sweep read")), milliseconds);
+    void promise.then(
+      (value) => {
+        clearTimeout(timer);
+        resolve(value);
+      },
+      (error: unknown) => {
+        clearTimeout(timer);
+        reject(error);
+      },
+    );
+  });
+}

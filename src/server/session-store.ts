@@ -21,15 +21,29 @@ export interface FileSessionStoreOptions {
   clock: Clock;
   activeTtlMs: number;
   pendingTtlMs: number;
+  fileSystem?: SessionStoreFileSystem;
+}
+
+/** Durable I/O boundary for session metadata and encrypted ciphertext. */
+export interface SessionStoreFileSystem {
+  mkdir: typeof mkdir;
+  readdir: typeof readdir;
+  readFile: typeof readFile;
+  rename: typeof rename;
+  rm: typeof rm;
+  stat: typeof stat;
+  writeFile: typeof writeFile;
 }
 
 const sessionIdPattern = /^[A-Za-z0-9_-]{22}$/;
+const nodeFileSystem: SessionStoreFileSystem = { mkdir, readdir, readFile, rename, rm, stat, writeFile };
 
 export class FileSessionStore {
   private readonly root: string;
   private readonly clock: Clock;
   private readonly activeTtlMs: number;
   private readonly pendingTtlMs: number;
+  private readonly fileSystem: SessionStoreFileSystem;
   private readonly writesInProgress = new Set<string>();
   private readonly sessionLocks = new Map<string, Promise<void>>();
   private lastSweepAt: number | null = null;
@@ -39,10 +53,11 @@ export class FileSessionStore {
     this.clock = options.clock;
     this.activeTtlMs = options.activeTtlMs;
     this.pendingTtlMs = options.pendingTtlMs;
+    this.fileSystem = options.fileSystem ?? nodeFileSystem;
   }
 
   async initialize(): Promise<void> {
-    await mkdir(this.root, { recursive: true });
+    await this.fileSystem.mkdir(this.root, { recursive: true });
     await this.cleanupInterruptedArtifacts();
   }
 
@@ -119,7 +134,7 @@ export class FileSessionStore {
     }
 
     try {
-      const bytes = new Uint8Array(await readFile(this.binPath(parsed.id)));
+      const bytes = new Uint8Array(await this.fileSystem.readFile(this.binPath(parsed.id)));
       if (parsed.expiresAt <= this.clock.now()) {
         return { kind: "gone" };
       }
@@ -153,6 +168,14 @@ export class FileSessionStore {
       if (record?.status !== "active" || record.expiresAt === null || record.expiresAt <= this.clock.now()) {
         return null;
       }
+      try {
+        await this.fileSystem.stat(this.binPath(id));
+      } catch (error) {
+        if (isNotFound(error)) {
+          return null;
+        }
+        throw error;
+      }
       return {
         id,
         expiresAt: record.expiresAt,
@@ -168,15 +191,22 @@ export class FileSessionStore {
 
     await this.cleanupInterruptedArtifacts();
     for (const id of await this.sessionIds()) {
-      const record = await this.readRecord(id);
-      if (!record) {
-        continue;
-      }
-      if (record.status === "pending" && record.createdAt + this.pendingTtlMs <= now) {
-        await this.deleteSession(id);
+      const deleted = await this.withSessionLock(id, async () => {
+        const record = await this.readRecord(id);
+        if (!record) return null;
+        if (record.status === "pending" && record.createdAt + this.pendingTtlMs <= now) {
+          await this.deleteSession(id);
+          return "pending" as const;
+        }
+        if (record.status !== "pending" && record.expiresAt !== null && record.expiresAt <= now) {
+          await this.deleteSession(id);
+          return "expired" as const;
+        }
+        return null;
+      });
+      if (deleted === "pending") {
         deletedPending += 1;
-      } else if (record.status !== "pending" && record.expiresAt !== null && record.expiresAt <= now) {
-        await this.deleteSession(id);
+      } else if (deleted === "expired") {
         deletedExpired += 1;
       }
     }
@@ -186,7 +216,7 @@ export class FileSessionStore {
   }
 
   async purgeAll(): Promise<number> {
-    const entries = await readdir(this.root);
+    const entries = await this.fileSystem.readdir(this.root);
     const ids = entries.flatMap((entry) => {
       const match = /^([A-Za-z0-9_-]{22})\.json$/.exec(entry);
       return match ? [match[1]!] : [];
@@ -194,7 +224,7 @@ export class FileSessionStore {
     await Promise.all(
       entries
         .filter((entry) => /^[A-Za-z0-9_-]{22}\.(?:bin|json)(?:\.[0-9a-f]+\.tmp)?$/.test(entry))
-        .map((entry) => rm(join(this.root, entry), { force: true })),
+        .map((entry) => this.fileSystem.rm(join(this.root, entry), { force: true })),
     );
     return ids.length;
   }
@@ -217,7 +247,7 @@ export class FileSessionStore {
         continue;
       }
       try {
-        encryptedBytes += (await stat(this.binPath(id))).size;
+        encryptedBytes += (await this.fileSystem.stat(this.binPath(id))).size;
       } catch (error) {
         if (!isNotFound(error)) {
           throw error;
@@ -229,7 +259,7 @@ export class FileSessionStore {
   }
 
   private async sessionIds(): Promise<string[]> {
-    const entries = await readdir(this.root);
+    const entries = await this.fileSystem.readdir(this.root);
     return entries.flatMap((entry) => {
       const match = /^([A-Za-z0-9_-]{22})\.json$/.exec(entry);
       return match ? [match[1]!] : [];
@@ -237,7 +267,7 @@ export class FileSessionStore {
   }
 
   private async cleanupInterruptedArtifacts(): Promise<void> {
-    const entries = await readdir(this.root);
+    const entries = await this.fileSystem.readdir(this.root);
     const completeIds = new Set(
       entries.flatMap((entry) => {
         const match = /^([A-Za-z0-9_-]{22})\.json$/.exec(entry);
@@ -253,7 +283,7 @@ export class FileSessionStore {
           return [];
         }
         if (temporary || !completeIds.has(id)) {
-          return [rm(join(this.root, entry), { force: true })];
+          return [this.fileSystem.rm(join(this.root, entry), { force: true })];
         }
         return [];
       }),
@@ -270,7 +300,7 @@ export class FileSessionStore {
 
   private async readRecord(id: string): Promise<SessionRecord | null> {
     try {
-      const value: unknown = JSON.parse(await readFile(this.jsonPath(id), "utf8"));
+      const value: unknown = JSON.parse(await this.fileSystem.readFile(this.jsonPath(id), "utf8"));
       return this.parseRecord(value, id);
     } catch (error) {
       if (isNotFound(error)) {
@@ -302,18 +332,18 @@ export class FileSessionStore {
     const destination = join(this.root, filename);
     const temporary = join(this.root, `${filename}.${randomBytes(8).toString("hex")}.tmp`);
     try {
-      await writeFile(temporary, contents);
-      await rename(temporary, destination);
+      await this.fileSystem.writeFile(temporary, contents);
+      await this.fileSystem.rename(temporary, destination);
     } catch (error) {
-      await rm(temporary, { force: true });
+      await this.fileSystem.rm(temporary, { force: true });
       throw error;
     }
   }
 
   private async deleteSession(id: string): Promise<void> {
     await Promise.all([
-      rm(this.binPath(id), { force: true }),
-      rm(this.jsonPath(id), { force: true }),
+      this.fileSystem.rm(this.binPath(id), { force: true }),
+      this.fileSystem.rm(this.jsonPath(id), { force: true }),
     ]);
   }
 
