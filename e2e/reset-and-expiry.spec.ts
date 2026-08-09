@@ -102,7 +102,15 @@ test.describe.serial("reset, recipient isolation, expiry, and cleanup", () => {
     await expiredRecipient.close();
   });
 
-  test("operator shutdown purges the isolated session directory", async ({ request }) => {
+  test("operator shutdown purges an active session from the isolated directory", async ({ page, request }) => {
+    const deliveryUrl = await issuePhoto(page);
+    const token = new URL(deliveryUrl).pathname.split("/").at(-1)!;
+    const sessionId = token.split(".")[1]!;
+    await expect.poll(async () => readdir(sessionDirectory)).toEqual(expect.arrayContaining([
+      `${sessionId}.bin`,
+      `${sessionId}.json`,
+    ]));
+
     const response = await request.post("/api/shutdown", { data: { confirm: "DELETE_ALL" } });
     expect(response.status()).toBe(202);
     await expect.poll(async () => readdir(sessionDirectory)).toEqual([]);
