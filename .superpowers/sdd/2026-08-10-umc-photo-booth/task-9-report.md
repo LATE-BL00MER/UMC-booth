@@ -34,7 +34,11 @@
 
 ## Commit
 
-Commit hash: `4a10716c44c9ef2c5fddcf1d88429a55a526088b` (superseded by the immediately following report-only amend).
+Task 9 commit chain (current HEAD before this report correction):
+
+- Feature: `9185a82233c8e7afef9f8d4dc0bf027ce6f14415` — `feat: issue encrypted multi-device QR sessions`
+- Cleanup fix: `379150ce21c2c85e058a6fdf3fc564ab1877ff29` — `fix: require pending cleanup before delivery retry`
+- Report update: `5abcbbd004cc9ca63b28ade79855d5d582186635` — `docs: record delivery cleanup verification`
 
 ## Concerns
 
