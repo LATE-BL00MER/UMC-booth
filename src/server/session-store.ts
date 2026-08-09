@@ -30,6 +30,7 @@ export class FileSessionStore {
   private readonly clock: Clock;
   private readonly activeTtlMs: number;
   private readonly pendingTtlMs: number;
+  private readonly writesInProgress = new Set<string>();
   private lastSweepAt: number | null = null;
 
   constructor(options: FileSessionStoreOptions) {
@@ -41,6 +42,7 @@ export class FileSessionStore {
 
   async initialize(): Promise<void> {
     await mkdir(this.root, { recursive: true });
+    await this.cleanupInterruptedArtifacts();
   }
 
   async createPending(bytes: Uint8Array): Promise<{ id: string; createdAt: number }> {
@@ -54,8 +56,13 @@ export class FileSessionStore {
       encryptedFile: `${id}.bin`,
     };
 
-    await this.writeAtomically(`${id}.bin`, bytes);
-    await this.writeAtomically(`${id}.json`, JSON.stringify(record));
+    this.writesInProgress.add(id);
+    try {
+      await this.writeAtomically(`${id}.bin`, bytes);
+      await this.writeAtomically(`${id}.json`, JSON.stringify(record));
+    } finally {
+      this.writesInProgress.delete(id);
+    }
     return { id, createdAt };
   }
 
@@ -78,7 +85,12 @@ export class FileSessionStore {
       status: "active",
       expiresAt,
     };
-    await this.writeAtomically(`${id}.json`, JSON.stringify(activeRecord));
+    this.writesInProgress.add(id);
+    try {
+      await this.writeAtomically(`${id}.json`, JSON.stringify(activeRecord));
+    } finally {
+      this.writesInProgress.delete(id);
+    }
     return { id, expiresAt, publicToken: formatPublicToken({ id, expiresAt }) };
   }
 
@@ -103,6 +115,9 @@ export class FileSessionStore {
 
     try {
       const bytes = new Uint8Array(await readFile(this.binPath(parsed.id)));
+      if (parsed.expiresAt <= this.clock.now()) {
+        return { kind: "gone" };
+      }
       return { kind: "active", record, bytes };
     } catch (error) {
       if (isNotFound(error)) {
@@ -129,6 +144,7 @@ export class FileSessionStore {
     let deletedPending = 0;
     let deletedExpired = 0;
 
+    await this.cleanupInterruptedArtifacts();
     for (const id of await this.sessionIds()) {
       const record = await this.readRecord(id);
       if (!record) {
@@ -196,6 +212,30 @@ export class FileSessionStore {
       const match = /^([A-Za-z0-9_-]{22})\.json$/.exec(entry);
       return match ? [match[1]!] : [];
     });
+  }
+
+  private async cleanupInterruptedArtifacts(): Promise<void> {
+    const entries = await readdir(this.root);
+    const completeIds = new Set(
+      entries.flatMap((entry) => {
+        const match = /^([A-Za-z0-9_-]{22})\.json$/.exec(entry);
+        return match ? [match[1]!] : [];
+      }),
+    );
+    await Promise.all(
+      entries.flatMap((entry) => {
+        const bin = /^([A-Za-z0-9_-]{22})\.bin$/.exec(entry);
+        const temporary = /^([A-Za-z0-9_-]{22})\.(?:bin|json)\.[0-9a-f]+\.tmp$/.exec(entry);
+        const id = bin?.[1] ?? temporary?.[1];
+        if (!id || this.writesInProgress.has(id)) {
+          return [];
+        }
+        if (temporary || !completeIds.has(id)) {
+          return [rm(join(this.root, entry), { force: true })];
+        }
+        return [];
+      }),
+    );
   }
 
   private async requireRecord(id: string): Promise<SessionRecord> {

@@ -62,6 +62,31 @@ describe("FileSessionStore", () => {
     expect(await readdir(root)).toEqual([]);
   });
 
+  it("removes interrupted-write artifacts at startup and during sweeps without removing an active pair", async () => {
+    const { root, store } = await createStore();
+    const active = await store.activate((await store.createPending(new Uint8Array([1]))).id);
+    const startupOrphan = "AAAAAAAAAAAAAAAAAAAAAA";
+    await writeFile(join(root, `${startupOrphan}.bin`), new Uint8Array([2]));
+    await writeFile(join(root, `${startupOrphan}.bin.deadbeef.tmp`), new Uint8Array([3]));
+    await writeFile(join(root, `${startupOrphan}.json.deadbeef.tmp`), "partial metadata");
+
+    const restarted = new FileSessionStore({
+      root,
+      clock: { now: () => 1_000 },
+      activeTtlMs: 600_000,
+      pendingTtlMs: 120_000,
+    });
+    await restarted.initialize();
+    expect(await readdir(root)).toEqual([`${active.id}.bin`, `${active.id}.json`]);
+    expect((await restarted.readActive(active.publicToken)).kind).toBe("active");
+
+    const sweepOrphan = "_____________________w";
+    await writeFile(join(root, `${sweepOrphan}.bin`), new Uint8Array([4]));
+    await writeFile(join(root, `${sweepOrphan}.json.deadbeef.tmp`), "partial metadata");
+    await restarted.sweep();
+    expect(await readdir(root)).toEqual([`${active.id}.bin`, `${active.id}.json`]);
+  });
+
   it("does not expose pending, mismatched, or malformed public tokens", async () => {
     const { store } = await createStore();
     const pending = await store.createPending(new Uint8Array([4]));
@@ -72,6 +97,15 @@ describe("FileSessionStore", () => {
     const active = await store.activate(pending.id);
     const mismatched = formatPublicToken({ id: active.id, expiresAt: active.expiresAt + 1 });
     expect((await store.readActive(mismatched)).kind).toBe("not-found");
+  });
+
+  it("returns gone when the clock advances while the ciphertext read is pending", async () => {
+    const { store, time } = await createStore();
+    const active = await store.activate((await store.createPending(new Uint8Array([4]))).id);
+
+    const lookup = store.readActive(active.publicToken);
+    time.value = active.expiresAt;
+    expect((await lookup).kind).toBe("gone");
   });
 
   it("deletes only pending sessions and reports current aggregate storage", async () => {
