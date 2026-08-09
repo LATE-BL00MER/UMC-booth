@@ -59,4 +59,4 @@ Review found that the coordinator swallowed a failed `deletePending` call, allow
 
 ### Commit
 
-Round 1 cleanup-fix commit: to be filled after commit.
+Round 1 cleanup-fix commit: `379150ce21c2c85e058a6fdf3fc564ab1877ff29`.
