@@ -1,6 +1,7 @@
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { toDataURL } from "qrcode";
 
 import { App, type AppServices, type RuntimePreflightStatus } from "../../src/operator/App.js";
 import type { CameraPort } from "../../src/operator/camera/camera-port.js";
@@ -8,6 +9,10 @@ import { MemoryIssuedSessionRegistry } from "../../src/operator/delivery/issued-
 import type { FrameManifest } from "../../src/operator/frames/frame-contract.js";
 import type { PreflightStatus } from "../../src/operator/components/PreflightBar.js";
 import type { IssuedSession } from "../../src/shared/contracts.js";
+
+vi.mock("qrcode", () => ({
+  toDataURL: vi.fn(async () => "data:image/png;base64,cXI="),
+}));
 
 const prompts: [string, string, string, string, string, string] = [
   "첫 번째 포즈",
@@ -37,6 +42,7 @@ const frame: FrameManifest = {
 
 const readyStatus: PreflightStatus = {
   cameraReady: true,
+  acceptingCaptures: true,
   tunnel: { state: "healthy", publicUrl: "https://booth.example", latencyMs: 12, error: null },
   lastSuccessfulSweepAt: Date.now(),
   framePackValid: true,
@@ -522,6 +528,85 @@ describe("App", () => {
     expect(await screen.findByRole("button", { name: "체험 시작" })).toBeVisible();
     expect(reissue).toHaveBeenCalledExactlyOnceWith("https://new.example");
   });
+
+  it("polls status every two seconds and replaces the displayed QR after a tunnel URL change", async () => {
+    vi.useFakeTimers();
+    const services = createFakeServices();
+    const oldStatus = runtimeReadyStatus();
+    const newStatus = {
+      ...runtimeReadyStatus(),
+      tunnel: { state: "healthy" as const, publicUrl: "https://new.example", latencyMs: 8, error: null },
+    };
+    let currentStatus = oldStatus;
+    const readStatus = vi.fn(async () => currentStatus);
+    services.preflight = { readStatus };
+    const reissue = vi.spyOn(services.registry, "reissueAll");
+    render(<App services={services} />);
+
+    await flushReact();
+    fireEvent.click(screen.getByRole("checkbox", { name: "모든 팀원이 촬영에 동의했습니다" }));
+    fireEvent.click(screen.getByRole("button", { name: "체험 시작" }));
+    await act(async () => { await vi.advanceTimersByTimeAsync(100); });
+    for (const number of [4, 1, 6, 3]) fireEvent.click(screen.getByAltText(`촬영 사진 ${number}`));
+    fireEvent.click(screen.getByRole("button", { name: "프레임 선택하기" }));
+    fireEvent.click(screen.getByRole("radio", { name: "기본 프레임" }));
+    fireEvent.click(screen.getByRole("button", { name: "이 프레임으로 사진 만들기" }));
+    await flushReact();
+    expect(screen.getByLabelText("QR 코드")).toBeVisible();
+
+    currentStatus = newStatus;
+    await act(async () => { await vi.advanceTimersByTimeAsync(1_899); });
+    expect(readStatus).toHaveBeenCalledOnce();
+    await act(async () => { await vi.advanceTimersByTimeAsync(1); });
+    await flushReact();
+
+    expect(readStatus).toHaveBeenCalledTimes(2);
+    expect(reissue).toHaveBeenCalledWith("https://new.example");
+    expect(vi.mocked(toDataURL)).toHaveBeenLastCalledWith(
+      "https://new.example/d/public-token#key=kept-out-of-app-state",
+      { errorCorrectionLevel: "M" },
+    );
+  });
+
+  it("reissues after activation when the tunnel URL changed while delivery was in flight", async () => {
+    vi.useFakeTimers();
+    const services = createFakeServices();
+    const activation = deferred<IssuedSession>();
+    let currentStatus = runtimeReadyStatus();
+    services.preflight = { readStatus: vi.fn(async () => currentStatus) };
+    services.delivery = {
+      issue: vi.fn(async () => {
+        const issued = await activation.promise;
+        services.registry.add(issued, "kept-out-of-app-state");
+        return issued;
+      }),
+    };
+    render(<App services={services} />);
+
+    await flushReact();
+    fireEvent.click(screen.getByRole("checkbox", { name: "모든 팀원이 촬영에 동의했습니다" }));
+    fireEvent.click(screen.getByRole("button", { name: "체험 시작" }));
+    await act(async () => { await vi.advanceTimersByTimeAsync(100); });
+    for (const number of [4, 1, 6, 3]) fireEvent.click(screen.getByAltText(`촬영 사진 ${number}`));
+    fireEvent.click(screen.getByRole("button", { name: "프레임 선택하기" }));
+    fireEvent.click(screen.getByRole("radio", { name: "기본 프레임" }));
+    fireEvent.click(screen.getByRole("button", { name: "이 프레임으로 사진 만들기" }));
+    await flushReact();
+
+    currentStatus = {
+      ...runtimeReadyStatus(),
+      tunnel: { state: "healthy", publicUrl: "https://during-delivery.example", latencyMs: 9, error: null },
+    };
+    await act(async () => { await vi.advanceTimersByTimeAsync(1_900); });
+    activation.resolve(issuedSession());
+    await flushReact();
+
+    expect(screen.getByLabelText("QR 코드")).toBeVisible();
+    expect(vi.mocked(toDataURL)).toHaveBeenLastCalledWith(
+      "https://during-delivery.example/d/public-token#key=kept-out-of-app-state",
+      { errorCorrectionLevel: "M" },
+    );
+  });
 });
 
 class BlockingCamera implements CameraPort {
@@ -565,6 +650,7 @@ async function reset(user: ReturnType<typeof userEvent.setup>): Promise<void> {
 
 function runtimeReadyStatus(): RuntimePreflightStatus {
   return {
+    acceptingCaptures: true,
     tunnel: { state: "healthy", publicUrl: "https://booth.example", latencyMs: 12, error: null },
     lastSuccessfulSweepAt: Date.now(),
     activeCiphertextCount: 0,

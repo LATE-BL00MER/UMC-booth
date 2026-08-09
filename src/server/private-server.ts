@@ -30,7 +30,7 @@ export function buildPrivateServer(deps: PrivateServerDependencies): FastifyInst
   void app.register(fastifyStatic, {
     root: resolve(deps.operatorBuildDir),
     prefix: "/",
-    index: ["index.html"],
+    index: ["operator.html", "index.html"],
     list: false,
     dotfiles: "deny",
     redirect: false,
@@ -70,6 +70,9 @@ export function buildPrivateServer(deps: PrivateServerDependencies): FastifyInst
   });
 
   app.post<{ Params: { id: string } }>("/api/sessions/:id/activate", async (request, reply) => {
+    if (!(await deps.runtimeStatus.getStatus()).acceptingCaptures) {
+      return sendSafeError(reply, 503);
+    }
     try {
       const session = await deps.store.activate(request.params.id);
       return reply.send(session);
@@ -105,7 +108,7 @@ export function buildPrivateServer(deps: PrivateServerDependencies): FastifyInst
       return sendSafeError(reply, 400);
     }
     setImmediate(() => {
-      void deps.runtimeStatus.requestShutdown();
+      void deps.runtimeStatus.requestShutdown().catch(() => undefined);
     });
     return reply.code(202).send();
   });

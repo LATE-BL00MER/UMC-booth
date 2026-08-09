@@ -26,9 +26,11 @@ import type { FrameManifest } from "./frames/frame-contract.js";
 
 const RESET_PENDING_DELETE_TIMEOUT_MS = 500;
 const RESET_PREFLIGHT_TIMEOUT_MS = 2_000;
+const STATUS_POLL_INTERVAL_MS = 2_000;
 
 export interface RuntimePreflightStatus {
   tunnel: PreflightStatus["tunnel"];
+  acceptingCaptures: boolean;
   lastSuccessfulSweepAt: number | null;
   activeCiphertextCount: number;
 }
@@ -56,6 +58,7 @@ export function App({ services }: { services: AppServices }) {
   const stateRef = useRef<BoothState>(state);
   const currentAbortController = useRef(new AbortController());
   const validatedPublicUrl = useRef<string | null>(null);
+  const lastHealthyPublicUrl = useRef<string | null>(null);
   const mounted = useRef(true);
   const mountedServices = useRef<AppServices | null>(null);
   const resetPromise = useRef<Promise<void> | null>(null);
@@ -66,6 +69,28 @@ export function App({ services }: { services: AppServices }) {
     stateRef.current = boothReducer(stateRef.current, event);
     reactDispatch(event);
   }, []);
+
+  const applyRuntimeStatus = useCallback((runtimeStatus: RuntimePreflightStatus) => {
+    const publicUrl = runtimeStatus.acceptingCaptures && runtimeStatus.tunnel.state === "healthy"
+      ? runtimeStatus.tunnel.publicUrl
+      : null;
+    if (publicUrl === null) {
+      validatedPublicUrl.current = null;
+      return;
+    }
+    if (lastHealthyPublicUrl.current !== null && lastHealthyPublicUrl.current !== publicUrl) {
+      const reissued = services.registry.reissueAll(publicUrl);
+      const currentIssued = stateRef.current.issuedSession;
+      const replacement = currentIssued === null
+        ? null
+        : reissued.find((issued) => issued.id === currentIssued.id) ?? null;
+      if (replacement !== null) {
+        dispatch({ type: "ISSUED_SESSION_REISSUED", issued: replacement });
+      }
+    }
+    lastHealthyPublicUrl.current = publicUrl;
+    validatedPublicUrl.current = publicUrl;
+  }, [dispatch, services]);
 
   const runPreflight = useCallback(async () => {
     const currentState = stateRef.current;
@@ -83,6 +108,7 @@ export function App({ services }: { services: AppServices }) {
 
       const status: PreflightStatus = {
         cameraReady,
+        acceptingCaptures: runtimeStatus.acceptingCaptures,
         tunnel: runtimeStatus.tunnel,
         lastSuccessfulSweepAt: runtimeStatus.lastSuccessfulSweepAt,
         framePackValid: hasValidFramePack(services.frames),
@@ -94,11 +120,7 @@ export function App({ services }: { services: AppServices }) {
 
       setPreflightStatus(status);
       if (getPreflightReadiness(status, Date.now())) {
-        const publicUrl = runtimeStatus.tunnel.publicUrl;
-        if (publicUrl !== null && validatedPublicUrl.current !== null && validatedPublicUrl.current !== publicUrl) {
-          services.registry.reissueAll(publicUrl);
-        }
-        validatedPublicUrl.current = publicUrl;
+        applyRuntimeStatus(runtimeStatus);
         dispatch({ type: "PREFLIGHT_SUCCEEDED", generation });
       } else {
         dispatch({ type: "PREFLIGHT_FAILED", generation, message: "운영 준비 상태를 확인할 수 없습니다" });
@@ -107,7 +129,7 @@ export function App({ services }: { services: AppServices }) {
       if (controller.signal.aborted || !mounted.current || currentAbortController.current !== controller) return;
       dispatch({ type: "PREFLIGHT_FAILED", generation, message: "운영 준비 상태를 확인할 수 없습니다" });
     }
-  }, [dispatch, services]);
+  }, [applyRuntimeStatus, dispatch, services]);
 
   const resetCurrentSession = useCallback(async () => {
     if (resetPromise.current) return resetPromise.current;
@@ -174,8 +196,13 @@ export function App({ services }: { services: AppServices }) {
       });
       if (controller.signal.aborted || currentAbortController.current !== controller) return;
 
+      const latestPublicUrl = validatedPublicUrl.current;
+      const displayedIssued = latestPublicUrl !== null && latestPublicUrl !== publicBaseUrl
+        ? services.registry.reissueAll(latestPublicUrl).find((candidate) => candidate.id === issued.id) ?? issued
+        : issued;
+
       revokePreviews(currentState);
-      dispatch({ type: "DELIVERY_SUCCEEDED", generation, issued });
+      dispatch({ type: "DELIVERY_SUCCEEDED", generation, issued: displayedIssued });
     } catch (error) {
       if (controller.signal.aborted || currentAbortController.current !== controller || isAbortError(error)) return;
       dispatch({ type: "DELIVERY_FAILED", generation, message: "사진을 만들지 못했습니다" });
@@ -221,6 +248,29 @@ export function App({ services }: { services: AppServices }) {
       }
     };
   }, [runPreflight, services]);
+
+  useEffect(() => {
+    const controller = new AbortController();
+    let polling = false;
+    const timer = setInterval(() => {
+      if (polling) return;
+      polling = true;
+      void services.preflight.readStatus(controller.signal)
+        .then((status) => {
+          if (!controller.signal.aborted && mounted.current) applyRuntimeStatus(status);
+        })
+        .catch(() => {
+          if (!controller.signal.aborted) validatedPublicUrl.current = null;
+        })
+        .finally(() => {
+          polling = false;
+        });
+    }, STATUS_POLL_INTERVAL_MS);
+    return () => {
+      controller.abort();
+      clearInterval(timer);
+    };
+  }, [applyRuntimeStatus, services]);
 
   const phaseScreen = renderPhase({
     state,

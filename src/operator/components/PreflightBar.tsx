@@ -9,6 +9,7 @@ export interface PreflightTunnelStatus {
 
 export interface PreflightStatus {
   cameraReady: boolean;
+  acceptingCaptures: boolean;
   tunnel: PreflightTunnelStatus;
   lastSuccessfulSweepAt: number | null;
   framePackValid: boolean;
@@ -27,6 +28,7 @@ const SWEEP_FRESHNESS_MS = 60_000;
 
 export function getPreflightReadiness(status: PreflightStatus, now: number): boolean {
   return status.cameraReady &&
+    status.acceptingCaptures &&
     status.tunnel.state === "healthy" &&
     isFreshSweep(status.lastSuccessfulSweepAt, now) &&
     status.framePackValid &&

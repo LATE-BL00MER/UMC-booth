@@ -77,6 +77,7 @@ function createBrowserServices(
             latencyMs: status.publicLatencyMs,
             error: null,
           },
+          acceptingCaptures: status.acceptingCaptures,
           lastSuccessfulSweepAt: status.lastSweepAt,
           activeCiphertextCount: status.pendingSessions + status.activeSessions,
         };
@@ -92,6 +93,7 @@ interface RuntimeStatusResponse {
   lastSweepAt: number | null;
   pendingSessions: number;
   activeSessions: number;
+  acceptingCaptures: boolean;
 }
 
 function parseRuntimeStatus(value: unknown): RuntimeStatusResponse {
@@ -101,7 +103,8 @@ function parseRuntimeStatus(value: unknown): RuntimeStatusResponse {
     !isNullableNumber(value.publicLatencyMs) ||
     !isNullableNumber(value.lastSweepAt) ||
     !isNonNegativeInteger(value.pendingSessions) ||
-    !isNonNegativeInteger(value.activeSessions)) {
+    !isNonNegativeInteger(value.activeSessions) ||
+    typeof value.acceptingCaptures !== "boolean") {
     throw new Error("Runtime status response is malformed");
   }
   return {
@@ -111,6 +114,7 @@ function parseRuntimeStatus(value: unknown): RuntimeStatusResponse {
     lastSweepAt: value.lastSweepAt,
     pendingSessions: value.pendingSessions,
     activeSessions: value.activeSessions,
+    acceptingCaptures: value.acceptingCaptures,
   };
 }
 

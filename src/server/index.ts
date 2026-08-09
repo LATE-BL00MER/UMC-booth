@@ -25,6 +25,7 @@ async function main(): Promise<void> {
   const metrics = new AggregateMetrics({
     persistencePath: resolve("runtime-data/metrics.json"),
   });
+  await metrics.initialize();
   const runtime = createRuntime({
     config,
     store,

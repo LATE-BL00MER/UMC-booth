@@ -1,5 +1,5 @@
 import { randomBytes } from "node:crypto";
-import { mkdir, rename, rm, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
 
 export type AggregateEvent = "decrypt_success" | "save_intent" | "join_click";
@@ -20,12 +20,13 @@ export interface AggregateMetricsOptions {
 
 export interface MetricsFileSystem {
   mkdir: typeof mkdir;
+  readFile: typeof readFile;
   rename: typeof rename;
   rm: typeof rm;
   writeFile: typeof writeFile;
 }
 
-const nodeFileSystem: MetricsFileSystem = { mkdir, rename, rm, writeFile };
+const nodeFileSystem: MetricsFileSystem = { mkdir, readFile, rename, rm, writeFile };
 
 const emptySnapshot = (): AggregateMetricsSnapshot => ({
   pages: 0,
@@ -42,6 +43,7 @@ export class AggregateMetrics {
   private readonly counters = emptySnapshot();
   private eventSecond: number | null = null;
   private acceptedEvents = 0;
+  private loadPromise: Promise<void> | null = null;
   private pendingPersistence: Promise<void> = Promise.resolve();
 
   constructor(options: AggregateMetricsOptions = {}) {
@@ -50,7 +52,13 @@ export class AggregateMetrics {
     this.fileSystem = options.fileSystem ?? nodeFileSystem;
   }
 
+  initialize(): Promise<void> {
+    this.loadPromise ??= this.loadPersisted();
+    return this.loadPromise;
+  }
+
   async record(event: AggregateEvent): Promise<boolean> {
+    await this.initialize();
     const second = Math.floor(this.now() / 1_000);
     if (second !== this.eventSecond) {
       this.eventSecond = second;
@@ -72,11 +80,13 @@ export class AggregateMetrics {
   }
 
   async recordPage(): Promise<void> {
+    await this.initialize();
     this.counters.pages += 1;
     await this.persist();
   }
 
   async recordDownload(): Promise<void> {
+    await this.initialize();
     this.counters.downloads += 1;
     await this.persist();
   }
@@ -95,6 +105,26 @@ export class AggregateMetrics {
     return write;
   }
 
+  private async loadPersisted(): Promise<void> {
+    if (this.persistencePath === null) return;
+    let raw: string;
+    try {
+      raw = await this.fileSystem.readFile(this.persistencePath, "utf8");
+    } catch (error) {
+      if (isNotFound(error)) return;
+      throw error;
+    }
+
+    let value: unknown;
+    try {
+      value = JSON.parse(raw);
+    } catch {
+      throw new Error("Invalid aggregate metrics");
+    }
+    const snapshot = parsePersistedMetrics(value);
+    Object.assign(this.counters, snapshot);
+  }
+
   private async writeAtomically(contents: string): Promise<void> {
     const destination = this.persistencePath;
     if (destination === null) return;
@@ -108,4 +138,32 @@ export class AggregateMetrics {
       throw error;
     }
   }
+}
+
+const persistedKeys = ["decryptSuccess", "downloads", "joinClick", "pages", "saveIntent", "updatedAt"] as const;
+
+function parsePersistedMetrics(value: unknown): AggregateMetricsSnapshot {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error("Invalid aggregate metrics");
+  }
+  const record = value as Record<string, unknown>;
+  if (Object.keys(record).sort().join(",") !== [...persistedKeys].sort().join(",")) {
+    throw new Error("Invalid aggregate metrics");
+  }
+  for (const key of persistedKeys) {
+    if (!Number.isSafeInteger(record[key]) || (record[key] as number) < 0) {
+      throw new Error("Invalid aggregate metrics");
+    }
+  }
+  return {
+    pages: record.pages as number,
+    downloads: record.downloads as number,
+    decryptSuccess: record.decryptSuccess as number,
+    saveIntent: record.saveIntent as number,
+    joinClick: record.joinClick as number,
+  };
+}
+
+function isNotFound(error: unknown): error is NodeJS.ErrnoException {
+  return typeof error === "object" && error !== null && "code" in error && error.code === "ENOENT";
 }

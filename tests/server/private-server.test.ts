@@ -153,6 +153,19 @@ describe("private server", () => {
     expect(activated.body).not.toContain("http");
   });
 
+  it("does not activate a pending session after runtime readiness closes", async () => {
+    const context = await createPrivateApp();
+    apps.push(context.app);
+    const pending = await context.store.createPending(new Uint8Array([1]));
+    context.availability.acceptingCaptures = false;
+
+    const response = await context.app.inject({ method: "POST", url: `/api/sessions/${pending.id}/activate` });
+
+    expect(response.statusCode).toBe(503);
+    expect(response.body).toBe('{"error":"Service unavailable"}');
+    expect((await context.store.inspectById(pending.id)).status).toBe("pending");
+  });
+
   it("atomically resolves or deletes only on the private listener with a fixed response", async () => {
     const context = await createPrivateApp();
     apps.push(context.app);
@@ -201,6 +214,24 @@ describe("private server", () => {
     expect((await context.app.inject({ method: "POST", url: "/api/shutdown", payload: { confirm: "DELETE_ALL" } })).statusCode).toBe(202);
     await new Promise((resolve) => setImmediate(resolve));
 
+    expect(context.runtimeStatus.requestShutdown).toHaveBeenCalledOnce();
+  });
+
+  it("contains asynchronous shutdown failures after the 202 response", async () => {
+    const context = await createPrivateApp();
+    apps.push(context.app);
+    context.runtimeStatus.requestShutdown = vi.fn(async () => {
+      throw new Error("purge failed");
+    });
+
+    const response = await context.app.inject({
+      method: "POST",
+      url: "/api/shutdown",
+      payload: { confirm: "DELETE_ALL" },
+    });
+    await new Promise((resolve) => setImmediate(resolve));
+
+    expect(response.statusCode).toBe(202);
     expect(context.runtimeStatus.requestShutdown).toHaveBeenCalledOnce();
   });
 

@@ -145,6 +145,20 @@ describe("boothReducer", () => {
     });
   });
 
+  it("replaces the displayed QR session when the active registry reissues it", () => {
+    const delivered = boothReducer(deliveringState(4), {
+      type: "DELIVERY_SUCCEEDED",
+      generation: 4,
+      issued: issuedSession,
+    });
+    const reissued = { ...issuedSession, deliveryUrl: "https://replacement.example/d/issued-1" };
+
+    const updated = boothReducer(delivered, { type: "ISSUED_SESSION_REISSUED", issued: reissued });
+
+    expect(updated.phase).toBe("qr");
+    expect(updated.issuedSession).toEqual(reissued);
+  });
+
   it("ignores an async result from before reset", () => {
     const reset = boothReducer(deliveringState(4), { type: "RESET_CONFIRMED" });
     const stale = boothReducer(reset, {

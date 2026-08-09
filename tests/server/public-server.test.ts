@@ -1,4 +1,4 @@
-import { mkdtemp } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -19,7 +19,7 @@ async function createPublicApp() {
   const metrics = new AggregateMetrics({ now: () => time.value });
   const app = buildPublicServer({ store, recipientHtml: "<!doctype html><title>Download</title>", metrics });
   await app.ready();
-  return { app, metrics, store, time };
+  return { app, metrics, root, store, time };
 }
 
 const privacyHeaders = {
@@ -100,6 +100,80 @@ describe("public server", () => {
     expect((await context.app.inject({ method: "POST", url: "/events", payload: { event: "unknown" } })).statusCode).toBe(400);
 
     expect(context.metrics.snapshot()).toEqual({ pages: 0, downloads: 0, decryptSuccess: 10, saveIntent: 0, joinClick: 0 });
+  });
+
+  it("rejects aggregate event bodies containing identifier-bearing extra fields", async () => {
+    const context = await createPublicApp();
+    apps.push(context.app);
+
+    const response = await context.app.inject({
+      method: "POST",
+      url: "/events",
+      payload: { event: "join_click", sessionId: "private-session-identifier" },
+    });
+
+    expect(response.statusCode).toBe(400);
+    expect(response.body).toBe('{"error":"Bad request"}');
+    expect(context.metrics.snapshot().joinClick).toBe(0);
+  });
+
+  it("keeps recipient HTML and ciphertext available when metrics persistence fails", async () => {
+    const root = await mkdtemp(join(tmpdir(), "umc-public-metrics-failure-"));
+    const time = { value: 1_000 };
+    const store = new FileSessionStore({ root: join(root, "sessions"), clock: { now: () => time.value }, activeTtlMs: 600_000, pendingTtlMs: 120_000 });
+    await store.initialize();
+    const metrics = new AggregateMetrics({
+      now: () => time.value,
+      persistencePath: join(root, "metrics.json"),
+      fileSystem: {
+        mkdir,
+        readFile,
+        writeFile,
+        rm,
+        rename: async () => { throw new Error("disk unavailable"); },
+      },
+    });
+    const app = buildPublicServer({ store, recipientHtml: "<!doctype html><title>Download</title>", metrics });
+    apps.push(app);
+    await app.ready();
+    const ciphertext = new Uint8Array([3, 2, 1]);
+    const active = await store.activate((await store.createPending(ciphertext)).id);
+
+    const documentResponse = await app.inject({ method: "GET", url: `/d/${active.publicToken}` });
+    const fileResponse = await app.inject({ method: "GET", url: `/f/${active.publicToken}` });
+
+    expect(documentResponse.statusCode).toBe(200);
+    expect(documentResponse.body).toContain("Download");
+    expect(fileResponse.statusCode).toBe(200);
+    expect(fileResponse.rawPayload).toEqual(Buffer.from(ciphertext));
+  });
+
+  it("does not wait for a stalled metrics write before serving a recipient document", async () => {
+    const root = await mkdtemp(join(tmpdir(), "umc-public-metrics-stall-"));
+    const store = new FileSessionStore({ root: join(root, "sessions"), clock: { now: () => 1_000 }, activeTtlMs: 600_000, pendingTtlMs: 120_000 });
+    await store.initialize();
+    const metrics = new AggregateMetrics({
+      persistencePath: join(root, "metrics.json"),
+      fileSystem: {
+        mkdir,
+        readFile,
+        rename,
+        rm,
+        writeFile: (() => new Promise<void>(() => undefined)) as typeof writeFile,
+      },
+    });
+    await metrics.initialize();
+    const app = buildPublicServer({ store, recipientHtml: "<!doctype html><title>Download</title>", metrics });
+    apps.push(app);
+    await app.ready();
+    const active = await store.activate((await store.createPending(new Uint8Array([1]))).id);
+
+    const status = await Promise.race([
+      app.inject({ method: "GET", url: `/d/${active.publicToken}` }).then((response) => response.statusCode),
+      new Promise<number>((_resolve, reject) => setTimeout(() => reject(new Error("delivery waited for metrics")), 50)),
+    ]);
+
+    expect(status).toBe(200);
   });
 
   it("returns 404 for unknown paths and never reflects request headers", async () => {

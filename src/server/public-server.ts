@@ -41,7 +41,7 @@ export function buildPublicServer(deps: PublicServerDependencies): FastifyInstan
     if (!sendLookupStatus(lookup, reply)) {
       return;
     }
-    await metrics.recordPage();
+    void metrics.recordPage().catch(() => undefined);
     return reply.type("text/html; charset=utf-8").send(recipientHtml);
   });
 
@@ -51,7 +51,7 @@ export function buildPublicServer(deps: PublicServerDependencies): FastifyInstan
     if (!sendLookupStatus(lookup, reply)) {
       return;
     }
-    await metrics.recordDownload();
+    void metrics.recordDownload().catch(() => undefined);
     return reply.type("application/octet-stream").send(Buffer.from(lookup.bytes));
   });
 
@@ -60,7 +60,7 @@ export function buildPublicServer(deps: PublicServerDependencies): FastifyInstan
     if (!event) {
       return sendSafeError(reply, 400);
     }
-    await metrics.record(event);
+    void metrics.record(event).catch(() => false);
     return reply.code(204).send();
   });
 
@@ -68,10 +68,10 @@ export function buildPublicServer(deps: PublicServerDependencies): FastifyInstan
 }
 
 function loadRecipientHtml(deps: PublicServerDependencies): string {
-  if (!deps.recipientTemplatePath || !deps.config) {
-    return deps.recipientHtml ?? "";
-  }
-  const template = readFileSync(deps.recipientTemplatePath, "utf8");
+  const template = deps.recipientTemplatePath
+    ? readFileSync(deps.recipientTemplatePath, "utf8")
+    : deps.recipientHtml ?? "";
+  if (!deps.config) return template;
   const serializedJoinUrl = JSON.stringify(deps.config.joinSiteUrl).replaceAll("<", "\\u003c");
   const joinConfigScript = `<script>window.__UMC_JOIN_SITE_URL__=${serializedJoinUrl}</script>`;
   return template.replace("__JOIN_CONFIG_SCRIPT__", joinConfigScript);
@@ -86,7 +86,7 @@ function sendLookupStatus(lookup: SessionLookup, reply: FastifyReply): lookup is
 }
 
 function getEvent(value: unknown): AggregateEvent | null {
-  if (!value || typeof value !== "object" || !("event" in value) || typeof value.event !== "string") {
+  if (!value || typeof value !== "object" || Object.keys(value).length !== 1 || !("event" in value) || typeof value.event !== "string") {
     return null;
   }
   return events.has(value.event as AggregateEvent) ? value.event as AggregateEvent : null;

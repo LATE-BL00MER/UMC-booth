@@ -68,6 +68,7 @@ export function createRuntime(deps: RuntimeDependencies): EventRuntime {
   let privateServer: RuntimeServer | null = null;
   let sweepTimer: unknown = null;
   let sweepHealthy = false;
+  let sweepQueue: Promise<void> = Promise.resolve();
   let started = false;
   let acceptingCaptures = false;
   let shutdownPromise: Promise<void> | null = null;
@@ -139,36 +140,62 @@ export function createRuntime(deps: RuntimeDependencies): EventRuntime {
         timers.clearInterval(sweepTimer);
         sweepTimer = null;
       }
+      await sweepQueue;
+      const errors: unknown[] = [];
       if (options.purge) {
-        await deps.store.purgeAll();
+        try {
+          await deps.store.purgeAll();
+        } catch {
+          // The definitive purge runs after the private listener drains.
+        }
       }
-      await tunnel.stop();
+      await attempt(() => tunnel.stop(), errors);
       if (privateServer !== null) {
-        await privateServer.close();
-        privateServer = null;
+        const server = privateServer;
+        if (await attempt(() => server.close(), errors)) {
+          privateServer = null;
+        }
+      }
+      if (options.purge) {
+        await attempt(() => deps.store.purgeAll(), errors);
       }
       if (publicServer !== null) {
-        await publicServer.close();
-        publicServer = null;
+        const server = publicServer;
+        if (await attempt(() => server.close(), errors)) {
+          publicServer = null;
+        }
+      }
+      if (errors.length > 0) {
+        throw new AggregateError(errors, "Runtime shutdown was incomplete");
       }
     },
 
     requestShutdown(): Promise<void> {
       shutdownPromise ??= (async () => {
-        await runtime.stop({ purge: true });
-        exit(0);
-      })();
+        try {
+          await runtime.stop({ purge: true });
+          exit(0);
+        } catch {
+          exit(1);
+        }
+      })().finally(() => {
+        shutdownPromise = null;
+      });
       return shutdownPromise;
     },
   };
 
-  async function runSweep(): Promise<void> {
-    try {
-      await deps.store.sweep();
-      sweepHealthy = true;
-    } catch {
-      sweepHealthy = false;
-    }
+  function runSweep(): Promise<void> {
+    const scheduled = sweepQueue.then(async () => {
+      try {
+        await deps.store.sweep();
+        sweepHealthy = true;
+      } catch {
+        sweepHealthy = false;
+      }
+    });
+    sweepQueue = scheduled.catch(() => undefined);
+    return scheduled;
   }
 
   function requestSignalShutdown(): void {
@@ -198,6 +225,16 @@ export function createRuntime(deps: RuntimeDependencies): EventRuntime {
   }
 
   return runtime;
+}
+
+async function attempt(operation: () => unknown | Promise<unknown>, errors: unknown[]): Promise<boolean> {
+  try {
+    await operation();
+    return true;
+  } catch (error) {
+    errors.push(error);
+    return false;
+  }
 }
 
 function assertLocalMode(config: AppConfig): void {

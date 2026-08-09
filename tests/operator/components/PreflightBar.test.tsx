@@ -9,6 +9,7 @@ import {
 
 const readyStatus: PreflightStatus = {
   cameraReady: true,
+  acceptingCaptures: true,
   tunnel: { state: "healthy", publicUrl: "https://calm-river.trycloudflare.com", latencyMs: 42, error: null },
   lastSuccessfulSweepAt: 40_001,
   framePackValid: true,
@@ -37,6 +38,7 @@ describe("PreflightBar", () => {
     expect(getPreflightReadiness({ ...readyStatus, loadedPoseCount: 5 }, 100_000)).toBe(false);
     expect(getPreflightReadiness({ ...readyStatus, lastSuccessfulSweepAt: 39_999 }, 100_000)).toBe(false);
     expect(getPreflightReadiness({ ...readyStatus, tunnel: { ...readyStatus.tunnel, state: "down" } }, 100_000)).toBe(false);
+    expect(getPreflightReadiness({ ...readyStatus, acceptingCaptures: false }, 100_000)).toBe(false);
 
     render(<PreflightBar status={{ ...readyStatus, joinUrlConfigured: false }} now={() => 100_000} />);
     expect(screen.getByLabelText("운영 준비 상태")).toHaveAttribute("data-ready", "false");

@@ -33,6 +33,7 @@ export type BoothEvent =
   | { type: "PENDING_SESSION_CREATED"; generation: number; id: string }
   | { type: "CAPTURE_FAILED"; generation: number; message: string }
   | { type: "DELIVERY_SUCCEEDED"; generation: number; issued: IssuedSession }
+  | { type: "ISSUED_SESSION_REISSUED"; issued: IssuedSession }
   | { type: "DELIVERY_FAILED"; generation: number; message: string }
   | { type: "DELIVERY_RETRY_REQUESTED" }
   | { type: "RESET_CONFIRMED" };
@@ -143,6 +144,15 @@ export function boothReducer(state: BoothState, event: BoothEvent): BoothState {
             issuedSession: event.issued,
             errorMessage: null,
           }
+        : state;
+
+    case "ISSUED_SESSION_REISSUED":
+      return state.phase === "qr"
+        && state.issuedSession !== null
+        && state.issuedSession.id === event.issued.id
+        && state.issuedSession.publicToken === event.issued.publicToken
+        && state.issuedSession.expiresAt === event.issued.expiresAt
+        ? { ...state, issuedSession: event.issued }
         : state;
 
     case "DELIVERY_FAILED":

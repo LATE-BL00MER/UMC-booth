@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, readFile, readdir, rename, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -38,10 +38,11 @@ describe("aggregate metrics persistence", () => {
   it("keeps the previous metrics file intact when the atomic rename fails", async () => {
     const root = await mkdtemp(join(tmpdir(), "umc-metrics-failure-"));
     const path = join(root, "metrics.json");
-    const previous = '{"pages":7,"updatedAt":100}';
+    const previous = '{"pages":7,"downloads":0,"decryptSuccess":0,"saveIntent":0,"joinClick":0,"updatedAt":100}';
     await writeFile(path, previous);
     const fileSystem: MetricsFileSystem = {
       mkdir,
+      readFile,
       writeFile,
       rm,
       rename: async () => {
@@ -67,5 +68,50 @@ describe("aggregate metrics persistence", () => {
     await expect(metrics.record("decrypt_success")).resolves.toBe(false);
 
     expect(JSON.parse(await readFile(path, "utf8"))).toMatchObject({ decryptSuccess: 10 });
+  });
+
+  it("loads valid aggregate counters before recording the first event after restart", async () => {
+    const root = await mkdtemp(join(tmpdir(), "umc-metrics-restart-"));
+    const path = join(root, "metrics.json");
+    await writeFile(path, JSON.stringify({
+      pages: 7,
+      downloads: 6,
+      decryptSuccess: 5,
+      saveIntent: 4,
+      joinClick: 3,
+      updatedAt: 100,
+    }));
+    const metrics = new AggregateMetrics({ now: () => 200, persistencePath: path });
+
+    await metrics.initialize();
+    await metrics.record("join_click");
+
+    expect(metrics.snapshot()).toEqual({ pages: 7, downloads: 6, decryptSuccess: 5, saveIntent: 4, joinClick: 4 });
+    expect(JSON.parse(await readFile(path, "utf8"))).toEqual({
+      pages: 7,
+      downloads: 6,
+      decryptSuccess: 5,
+      saveIntent: 4,
+      joinClick: 4,
+      updatedAt: 200,
+    });
+  });
+
+  it("rejects persisted metrics containing unknown or identifier fields", async () => {
+    const root = await mkdtemp(join(tmpdir(), "umc-metrics-invalid-"));
+    const path = join(root, "metrics.json");
+    await writeFile(path, JSON.stringify({
+      pages: 1,
+      downloads: 0,
+      decryptSuccess: 0,
+      saveIntent: 0,
+      joinClick: 0,
+      updatedAt: 100,
+      sessionId: "must-not-load",
+    }));
+    const metrics = new AggregateMetrics({ persistencePath: path });
+
+    await expect(metrics.initialize()).rejects.toThrow("Invalid aggregate metrics");
+    expect(metrics.snapshot()).toEqual({ pages: 0, downloads: 0, decryptSuccess: 0, saveIntent: 0, joinClick: 0 });
   });
 });

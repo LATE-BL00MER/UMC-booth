@@ -231,7 +231,163 @@ describe("event runtime", () => {
     await runtime.stop({ purge: true });
 
     expect(harness.acceptingAtPurge()).toBe(false);
-    expect(harness.order).toEqual(["store:purge-all", "tunnel:stop", "private:close", "public:close"]);
+    expect(harness.order).toEqual(["store:purge-all", "tunnel:stop", "private:close", "store:purge-all", "public:close"]);
+  });
+
+  it("purges again after the private listener drains an in-flight ciphertext write", async () => {
+    const order: string[] = [];
+    let ciphertextPresent = false;
+    const dependencies: RuntimeDependencies = {
+      config: config(),
+      store: {
+        initialize: async () => undefined,
+        sweep: async () => ({ deletedPending: 0, deletedExpired: 0 }),
+        purgeAll: async () => {
+          order.push("purge");
+          ciphertextPresent = false;
+          return 0;
+        },
+        stats: async () => ({ pending: 0, active: 0, encryptedBytes: 0, lastSweepAt: 1_000 }),
+      },
+      createPublicServer: () => ({
+        listen: async () => "http://127.0.0.1:4174",
+        close: async () => { order.push("public:close"); },
+      }),
+      createPrivateServer: () => ({
+        listen: async () => "http://127.0.0.1:4173",
+        close: async () => {
+          order.push("private:close");
+          ciphertextPresent = true;
+        },
+      }),
+      tunnel: {
+        start: async () => undefined,
+        stop: async () => { order.push("tunnel:stop"); },
+        status: () => ({ state: "healthy", publicUrl: "https://booth.example", latencyMs: 1, error: null }),
+      },
+      timers: { setInterval: () => 1, clearInterval: () => undefined },
+      signals: { once: () => undefined, off: () => undefined },
+      exit: vi.fn(),
+    };
+    const runtime = createRuntime(dependencies);
+    await runtime.start();
+
+    await runtime.stop({ purge: true });
+
+    expect(ciphertextPresent).toBe(false);
+    expect(order).toEqual(["purge", "tunnel:stop", "private:close", "purge", "public:close"]);
+  });
+
+  it("continues cleanup after failures, exits nonzero when purge cannot be verified, and permits retry", async () => {
+    const order: string[] = [];
+    let purgeFails = true;
+    const exit = vi.fn();
+    const dependencies: RuntimeDependencies = {
+      config: config(),
+      store: {
+        initialize: async () => undefined,
+        sweep: async () => ({ deletedPending: 0, deletedExpired: 0 }),
+        purgeAll: async () => {
+          order.push("purge");
+          if (purgeFails) throw new Error("purge failed");
+          return 0;
+        },
+        stats: async () => ({ pending: 0, active: 0, encryptedBytes: 0, lastSweepAt: 1_000 }),
+      },
+      createPublicServer: () => ({
+        listen: async () => "http://127.0.0.1:4174",
+        close: async () => { order.push("public:close"); },
+      }),
+      createPrivateServer: () => ({
+        listen: async () => "http://127.0.0.1:4173",
+        close: async () => { order.push("private:close"); },
+      }),
+      tunnel: {
+        start: async () => undefined,
+        stop: async () => { order.push("tunnel:stop"); },
+        status: () => ({ state: "healthy", publicUrl: "https://booth.example", latencyMs: 1, error: null }),
+      },
+      timers: { setInterval: () => 1, clearInterval: () => undefined },
+      signals: { once: () => undefined, off: () => undefined },
+      exit,
+    };
+    const runtime = createRuntime(dependencies);
+    await runtime.start();
+
+    await expect(runtime.requestShutdown()).resolves.toBeUndefined();
+    expect(order).toEqual(["purge", "tunnel:stop", "private:close", "purge", "public:close"]);
+    expect(exit).toHaveBeenLastCalledWith(1);
+
+    purgeFails = false;
+    order.splice(0);
+    await expect(runtime.requestShutdown()).resolves.toBeUndefined();
+    expect(order).toEqual(["purge", "tunnel:stop", "purge"]);
+    expect(exit).toHaveBeenLastCalledWith(0);
+  });
+
+  it("retains a listener whose close fails so a later shutdown can retry it", async () => {
+    let privateCloseFails = true;
+    let privateCloseCalls = 0;
+    const exit = vi.fn();
+    const harness = createHarness({
+      createPrivateServer: () => ({
+        listen: async () => "http://127.0.0.1:4173",
+        close: async () => {
+          privateCloseCalls += 1;
+          if (privateCloseFails) throw new Error("private close failed");
+        },
+      }),
+      exit,
+    });
+    const runtime = createRuntime(harness.dependencies);
+    await runtime.start();
+
+    await runtime.requestShutdown();
+    expect(privateCloseCalls).toBe(1);
+    expect(exit).toHaveBeenLastCalledWith(1);
+
+    privateCloseFails = false;
+    await runtime.requestShutdown();
+    expect(privateCloseCalls).toBe(2);
+    expect(exit).toHaveBeenLastCalledWith(0);
+  });
+
+  it("serializes scheduled sweeps so an older failure cannot overwrite a newer success", async () => {
+    const firstScheduledSweep = deferred<void>();
+    let sweepCalls = 0;
+    const scheduled: { tick: (() => void | Promise<void>) | null } = { tick: null };
+    const harness = createHarness({
+      store: {
+        initialize: async () => undefined,
+        sweep: async () => {
+          sweepCalls += 1;
+          if (sweepCalls === 2) await firstScheduledSweep.promise;
+          return { deletedPending: 0, deletedExpired: 0 };
+        },
+        purgeAll: async () => 0,
+        stats: async () => ({ pending: 0, active: 0, encryptedBytes: 0, lastSweepAt: 1_000 }),
+      },
+      timers: {
+        setInterval(callback) {
+          scheduled.tick = callback;
+          return callback;
+        },
+        clearInterval() { scheduled.tick = null; },
+      },
+    });
+    const runtime = createRuntime(harness.dependencies);
+    await runtime.start();
+    if (scheduled.tick === null) throw new Error("Sweep was not scheduled");
+
+    const first = scheduled.tick();
+    const second = scheduled.tick();
+    await Promise.resolve();
+    expect(sweepCalls).toBe(2);
+    firstScheduledSweep.resolve();
+    await Promise.all([first, second]);
+
+    expect(sweepCalls).toBe(3);
+    expect((await runtime.getStatus()).acceptingCaptures).toBe(true);
   });
 
   it("routes SIGINT and SIGTERM through the same purge path and exits zero", async () => {
@@ -244,46 +400,55 @@ describe("event runtime", () => {
       harness.signal(signal);
       await runtime.requestShutdown();
 
-      expect(harness.order).toEqual(["store:purge-all", "tunnel:stop", "private:close", "public:close"]);
+      expect(harness.order).toEqual(["store:purge-all", "tunnel:stop", "private:close", "store:purge-all", "public:close"]);
       expect(harness.dependencies.exit).toHaveBeenCalledOnce();
       expect(harness.dependencies.exit).toHaveBeenCalledWith(0);
     }
   });
 
   it("denies access exactly at expiry and deletes files by the next scheduled sweep", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1_000);
     const root = await mkdtemp(join(tmpdir(), "umc-runtime-expiry-"));
-    const time = { value: 1_000 };
     const store = new FileSessionStore({
       root,
-      clock: { now: () => time.value },
+      clock: { now: Date.now },
       activeTtlMs: 600_000,
       pendingTtlMs: 120_000,
     });
-    const scheduled: { sweep: (() => void | Promise<void>) | null } = { sweep: null };
     const harness = createHarness({
       store,
-      timers: {
-        setInterval(callback, delayMs) {
-          expect(delayMs).toBe(30_000);
-          scheduled.sweep = callback;
-          return callback;
-        },
-        clearInterval() {
-          scheduled.sweep = null;
-        },
-      },
+      timers: undefined,
     });
     const runtime = createRuntime(harness.dependencies);
-    await runtime.start();
-    const active = await store.activate((await store.createPending(new Uint8Array([1, 2, 3]))).id);
+    try {
+      await runtime.start();
+      await vi.advanceTimersByTimeAsync(1);
+      const active = await store.activate((await store.createPending(new Uint8Array([1, 2, 3]))).id);
 
-    time.value = active.expiresAt;
-    expect((await store.readActive(active.publicToken)).kind).toBe("gone");
-    expect(await readdir(root)).toHaveLength(2);
-    if (scheduled.sweep === null) throw new Error("Sweep was not scheduled");
-    await scheduled.sweep();
-    expect(await readdir(root)).toEqual([]);
+      vi.setSystemTime(active.expiresAt - 1);
+      expect(Date.now()).toBe(active.expiresAt - 1);
+      expect((await store.readActive(active.publicToken)).kind).toBe("active");
+      vi.setSystemTime(active.expiresAt);
+      expect((await store.readActive(active.publicToken)).kind).toBe("gone");
+      expect(await readdir(root)).toHaveLength(2);
 
-    await runtime.stop({ purge: false });
+      await vi.advanceTimersByTimeAsync(29_999);
+      await runtime.stop({ purge: false });
+      expect(await readdir(root)).toEqual([]);
+    } finally {
+      await runtime.stop({ purge: false });
+      vi.useRealTimers();
+    }
   });
 });
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise;
+    reject = rejectPromise;
+  });
+  return { promise, resolve, reject };
+}

@@ -7,14 +7,14 @@ import { buildPrivateServer } from "../../src/server/private-server";
 import { FileSessionStore } from "../../src/server/session-store";
 import type { RuntimeStatusProvider } from "../../src/server/types";
 
-async function createAppWithAssets(relativeAssetPaths = false) {
+async function createAppWithAssets(relativeAssetPaths = false, operatorEntry = "index.html") {
   const root = await mkdtemp(join(tmpdir(), "umc-static-"));
   const operatorBuildDir = join(root, "operator");
   const framePackDir = join(root, "frames");
   const poseConfigPath = join(root, "poses.json");
   await mkdir(join(operatorBuildDir, "assets"), { recursive: true });
   await mkdir(framePackDir, { recursive: true });
-  await writeFile(join(operatorBuildDir, "index.html"), "<!doctype html><title>Operator</title>");
+  await writeFile(join(operatorBuildDir, operatorEntry), "<!doctype html><title>Operator</title>");
   await writeFile(join(operatorBuildDir, "assets", "app.js"), "console.log('operator')");
   await writeFile(join(framePackDir, "frame.svg"), "<svg></svg>");
   await writeFile(poseConfigPath, '["one", "two", "three", "four", "five", "six"]');
@@ -53,6 +53,15 @@ describe("private static assets", () => {
 
     expect((await app.inject({ method: "GET", url: "/frame-pack/frame.svg" })).body).toContain("svg");
     expect((await app.inject({ method: "GET", url: "/poses.json" })).json()).toHaveLength(6);
+  });
+
+  it("serves the Vite operator entrypoint from the printed root URL", async () => {
+    const app = await createAppWithAssets(false, "operator.html");
+    apps.push(app);
+
+    const response = await app.inject({ method: "GET", url: "/" });
+    expect(response.statusCode).toBe(200);
+    expect(response.body).toContain("Operator");
   });
 
   it("rejects traversal, directories, dotfiles, and unrelated filesystem paths", async () => {
