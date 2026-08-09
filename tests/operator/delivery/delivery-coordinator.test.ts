@@ -168,31 +168,116 @@ describe("EncryptedDeliveryCoordinator", () => {
     expect(registry.activeCount()).toBe(1);
   });
 
-  it("keeps an ambiguously activated session intact when recovery cannot be queried", async () => {
+  it.each([1, 2])("recovers a committed activation after %i transient recovery transport failures", async (failures) => {
     const api = new FakePrivateApi();
-    api.failActivateCount = 1;
-    api.failGetActivatedCount = 1;
+    api.commitActivationBeforeResponseError = true;
+    api.failGetActivatedCount = failures;
     const sleeper = new FakeSleeper();
+    const registry = new MemoryIssuedSessionRegistry();
     const coordinator = new EncryptedDeliveryCoordinator(
       api,
-      new MemoryIssuedSessionRegistry(),
+      registry,
       sleeper.sleep,
     );
 
-    await expect(coordinator.issue(validIssueInput())).rejects.toThrow("temporary activation failure");
-    expect(api.calls.map(({ operation }) => operation)).toEqual([
-      "create",
-      "activate",
-      "get-activated",
-    ]);
+    await expect(coordinator.issue(validIssueInput())).resolves.toMatchObject({ id: api.createdId });
+    expect(api.calls.filter(({ operation }) => operation === "get-activated")).toHaveLength(failures + 1);
     expect(api.deletedPendingIds).toEqual([]);
     expect(api.createAttempts).toBe(1);
-    expect(sleeper.delays).toEqual([]);
+    expect(sleeper.delays).toEqual(failures === 1 ? [1_000] : [1_000, 2_000]);
+    expect(registry.activeCount()).toBe(1);
   });
 
-  it("cleans up a failed activation before starting a retry", async () => {
+  it("continues recovery after reset aborts a committed activation response", async () => {
+    const api = new FakePrivateApi();
+    api.commitActivationBeforeAbort = true;
+    api.failGetActivatedCount = 1;
+    const sleeper = new FakeSleeper();
+    const registry = new MemoryIssuedSessionRegistry();
+    const controller = new AbortController();
+    const coordinator = new EncryptedDeliveryCoordinator(api, registry, sleeper.sleep);
+
+    const issuing = coordinator.issue(validIssueInput(controller.signal));
+    await vi.waitFor(() => expect(api.calls).toContainEqual({ operation: "activate", id: api.createdId }));
+    controller.abort();
+
+    await expect(issuing).resolves.toMatchObject({ id: api.createdId });
+    expect(api.calls.filter(({ operation }) => operation === "get-activated")).toHaveLength(2);
+    expect(api.deletedPendingIds).toEqual([]);
+    expect(api.createAttempts).toBe(1);
+    expect(registry.activeCount()).toBe(1);
+  });
+
+  it("retains a persistent ambiguous activation for a later same-generation recovery", async () => {
+    const api = new FakePrivateApi();
+    api.commitActivationBeforeResponseError = true;
+    api.failGetActivatedCount = 3;
+    const sleeper = new FakeSleeper();
+    const registry = new MemoryIssuedSessionRegistry();
+    const coordinator = new EncryptedDeliveryCoordinator(api, registry, sleeper.sleep);
+
+    await expect(coordinator.issue(validIssueInput())).rejects.toThrow("activation response lost");
+    expect(api.calls.filter(({ operation }) => operation === "get-activated")).toHaveLength(3);
+    expect(api.deletedPendingIds).toEqual([]);
+    expect(api.createAttempts).toBe(1);
+    expect(sleeper.delays).toEqual([1_000, 2_000]);
+
+    const issued = await coordinator.issue(validIssueInput());
+    expect(issued).toMatchObject({ id: api.createdId, publicToken: "public-token" });
+    expect(issued.deliveryUrl).toMatch(/^https:\/\/booth\.example\/d\/public-token#key=/);
+    expect(api.createAttempts).toBe(1);
+    expect(api.deletedPendingIds).toEqual([]);
+    expect(registry.activeCount()).toBe(1);
+  });
+
+  it("prunes an expired recovery from an old generation without deleting it blindly", async () => {
+    const api = new FakePrivateApi();
+    api.commitActivationBeforeResponseError = true;
+    api.failGetActivatedCount = 3;
+    const time = { value: 1_000 };
+    const coordinator = new EncryptedDeliveryCoordinator(
+      api,
+      new MemoryIssuedSessionRegistry(),
+      new FakeSleeper().sleep,
+      () => time.value,
+    );
+
+    await expect(coordinator.issue(validIssueInput())).rejects.toThrow("activation response lost");
+    expect(coordinator.pruneRetainedRecoveries()).toBe(0);
+
+    time.value = 601_000;
+    expect(coordinator.pruneRetainedRecoveries()).toBe(1);
+    expect(api.deletedPendingIds).toEqual([]);
+    expect(api.createAttempts).toBe(1);
+  });
+
+  it("keeps a failed recovery retryable past its initial backoff window", async () => {
+    const api = new FakePrivateApi();
+    api.commitActivationBeforeResponseError = true;
+    api.failGetActivatedCount = 3;
+    const time = { value: 1_000 };
+    const registry = new MemoryIssuedSessionRegistry();
+    const coordinator = new EncryptedDeliveryCoordinator(
+      api,
+      registry,
+      new FakeSleeper().sleep,
+      () => time.value,
+    );
+
+    await expect(coordinator.issue(validIssueInput())).rejects.toThrow("activation response lost");
+    time.value = 6_001;
+    expect(coordinator.pruneRetainedRecoveries()).toBe(0);
+
+    await expect(coordinator.recoverRetained(4)).resolves.toMatchObject({ id: api.createdId });
+    expect(api.createAttempts).toBe(1);
+    expect(api.deletedPendingIds).toEqual([]);
+    expect(registry.activeCount()).toBe(1);
+  });
+
+  it("cleans up and retries only after recovery definitively reports inactive", async () => {
     const api = new FakePrivateApi();
     api.failActivateCount = 1;
+    api.failGetActivatedCount = 1;
     const sleeper = new FakeSleeper();
     const coordinator = new EncryptedDeliveryCoordinator(
       api,
@@ -206,11 +291,12 @@ describe("EncryptedDeliveryCoordinator", () => {
       "create",
       "activate",
       "get-activated",
+      "get-activated",
       "delete",
       "create",
       "activate",
     ]);
-    expect(sleeper.delays).toEqual([1_000]);
+    expect(sleeper.delays).toEqual([1_000, 1_000]);
   });
 
   it("stops when pending cleanup fails instead of creating another ciphertext", async () => {

@@ -22,11 +22,30 @@ export interface DeliveryCoordinator {
 
 export type Sleep = (milliseconds: number, signal: AbortSignal) => Promise<void>;
 
+interface PendingActivationRecovery {
+  id: string;
+  keyFragment: string;
+  publicBaseUrl: string;
+  activationError: unknown;
+  expiresAt: number;
+}
+
+type RecoveryResult =
+  | { kind: "active"; issued: IssuedSession }
+  | { kind: "inactive" }
+  | { kind: "unavailable"; error: unknown };
+
+const recoveryDelaysMs = [0, 1_000, 2_000] as const;
+const retainedRecoveryTtlMs = 10 * 60 * 1_000;
+
 export class EncryptedDeliveryCoordinator implements DeliveryCoordinator {
+  private readonly pendingRecoveries = new Map<number, PendingActivationRecovery>();
+
   constructor(
     private readonly api: PrivateApiClient,
     private readonly registry: IssuedSessionRegistry,
     private readonly sleep: Sleep = abortableSleep,
+    private readonly now: () => number = () => Date.now(),
   ) {}
 
   async issue(input: {
@@ -36,6 +55,19 @@ export class EncryptedDeliveryCoordinator implements DeliveryCoordinator {
     signal: AbortSignal;
     onPendingSessionCreated?(id: string): void;
   }): Promise<IssuedSession> {
+    this.pruneRetainedRecoveries();
+    const retained = this.pendingRecoveries.get(input.generation);
+    if (retained !== undefined) {
+      const recovery = await this.recoverActivation(input.generation, retained);
+      if (recovery.kind === "active") {
+        return recovery.issued;
+      }
+      if (recovery.kind === "unavailable") {
+        throw errorWithCause(retained.activationError, recovery.error, "Delivery activation recovery failed");
+      }
+      await this.deleteRetainedPending(retained);
+    }
+
     throwIfAborted(input.signal);
     const plain = new Uint8Array(await input.jpeg.arrayBuffer());
     let lastError: unknown;
@@ -73,22 +105,20 @@ export class EncryptedDeliveryCoordinator implements DeliveryCoordinator {
         return issued;
       } catch (error) {
         if (pendingId !== null && keyFragment !== null && activationAttempted) {
-          const recovered = await this.api.getActivated(pendingId).then(
-            (activated) => ({ kind: "confirmed" as const, activated }),
-            (recoveryError: unknown) => ({ kind: "unknown" as const, recoveryError }),
-          );
-          if (recovered.kind === "confirmed" && recovered.activated !== null) {
-            const issued: IssuedSession = {
-              id: pendingId,
-              publicToken: recovered.activated.publicToken,
-              deliveryUrl: buildDeliveryUrl(input.publicBaseUrl, recovered.activated.publicToken, keyFragment),
-              expiresAt: recovered.activated.expiresAt,
-            };
-            this.registry.add(issued, keyFragment);
-            return issued;
+          const recovery: PendingActivationRecovery = {
+            id: pendingId,
+            keyFragment,
+            publicBaseUrl: input.publicBaseUrl,
+            activationError: error,
+            expiresAt: this.now() + retainedRecoveryTtlMs,
+          };
+          this.pendingRecoveries.set(input.generation, recovery);
+          const recovered = await this.recoverActivation(input.generation, recovery);
+          if (recovered.kind === "active") {
+            return recovered.issued;
           }
-          if (recovered.kind === "unknown") {
-            throw errorWithCause(error, recovered.recoveryError, "Delivery activation recovery failed");
+          if (recovered.kind === "unavailable") {
+            throw errorWithCause(error, recovered.error, "Delivery activation recovery failed");
           }
         }
         if (pendingId !== null) {
@@ -105,20 +135,108 @@ export class EncryptedDeliveryCoordinator implements DeliveryCoordinator {
 
     throw lastError ?? new Error("Could not issue delivery session");
   }
+
+  /**
+   * Explicitly resumes a retained ambiguous activation without creating a new
+   * session. An unavailable recovery remains retained for a later attempt.
+   */
+  async recoverRetained(generation: number): Promise<IssuedSession | null> {
+    this.pruneRetainedRecoveries();
+    const retained = this.pendingRecoveries.get(generation);
+    if (retained === undefined) {
+      return null;
+    }
+    const recovery = await this.recoverActivation(generation, retained);
+    if (recovery.kind === "active") {
+      return recovery.issued;
+    }
+    if (recovery.kind === "inactive") {
+      await this.deleteRetainedPending(retained);
+    }
+    return null;
+  }
+
+  /**
+   * Releases only expired ambiguous-recovery key fragments. Runtime callers may
+   * invoke this during maintenance; `issue()` also prunes before every attempt.
+   */
+  pruneRetainedRecoveries(now = this.now()): number {
+    let removed = 0;
+    for (const [generation, recovery] of this.pendingRecoveries) {
+      if (recovery.expiresAt <= now) {
+        this.pendingRecoveries.delete(generation);
+        removed += 1;
+      }
+    }
+    return removed;
+  }
+
+  private async recoverActivation(generation: number, recovery: PendingActivationRecovery): Promise<RecoveryResult> {
+    if (recovery.expiresAt <= this.now()) {
+      this.clearRecovery(generation, recovery);
+      return { kind: "inactive" };
+    }
+    const recoverySignal = new AbortController().signal;
+    let lastError: unknown = new Error("Delivery activation recovery failed");
+
+    for (const delay of recoveryDelaysMs) {
+      try {
+        if (delay > 0) {
+          await this.sleep(delay, recoverySignal);
+        }
+        const activated = await this.api.getActivated(recovery.id);
+        if (activated === null) {
+          this.clearRecovery(generation, recovery);
+          return { kind: "inactive" };
+        }
+        const issued: IssuedSession = {
+          id: recovery.id,
+          publicToken: activated.publicToken,
+          deliveryUrl: buildDeliveryUrl(recovery.publicBaseUrl, activated.publicToken, recovery.keyFragment),
+          expiresAt: activated.expiresAt,
+        };
+        this.registry.add(issued, recovery.keyFragment);
+        this.clearRecovery(generation, recovery);
+        return { kind: "active", issued };
+      } catch (error) {
+        lastError = error;
+      }
+    }
+
+    return { kind: "unavailable", error: lastError };
+  }
+
+  private clearRecovery(generation: number, recovery: PendingActivationRecovery): void {
+    if (this.pendingRecoveries.get(generation) === recovery) {
+      this.pendingRecoveries.delete(generation);
+    }
+  }
+
+  private async deleteRetainedPending(recovery: PendingActivationRecovery): Promise<void> {
+    try {
+      await this.api.deletePending(recovery.id);
+    } catch (cleanupError) {
+      throw errorWithCause(recovery.activationError, cleanupError, "Delivery failed and pending cleanup failed");
+    }
+  }
 }
 
 export function abortableSleep(milliseconds: number, signal: AbortSignal): Promise<void> {
   if (signal.aborted) return Promise.reject(abortError());
   return new Promise((resolve, reject) => {
-    const timer = setTimeout(resolve, milliseconds);
-    signal.addEventListener(
-      "abort",
-      () => {
-        clearTimeout(timer);
-        reject(abortError());
-      },
-      { once: true },
-    );
+    const onAbort = () => {
+      cleanup();
+      reject(abortError());
+    };
+    const timer = setTimeout(() => {
+      cleanup();
+      resolve();
+    }, milliseconds);
+    const cleanup = () => {
+      clearTimeout(timer);
+      signal.removeEventListener("abort", onAbort);
+    };
+    signal.addEventListener("abort", onAbort, { once: true });
   });
 }
 
