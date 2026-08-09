@@ -31,6 +31,7 @@ export type BoothEvent =
   | { type: "FRAME_SELECTED"; id: string }
   | { type: "FRAME_CONFIRMED" }
   | { type: "PENDING_SESSION_CREATED"; generation: number; id: string }
+  | { type: "CAPTURE_FAILED"; generation: number; message: string }
   | { type: "DELIVERY_SUCCEEDED"; generation: number; issued: IssuedSession }
   | { type: "DELIVERY_FAILED"; generation: number; message: string }
   | { type: "DELIVERY_RETRY_REQUESTED" }
@@ -123,6 +124,11 @@ export function boothReducer(state: BoothState, event: BoothEvent): BoothState {
     case "PENDING_SESSION_CREATED":
       return matchesGeneration(state, event) && state.phase === "delivering"
         ? { ...state, pendingSessionId: event.id }
+        : state;
+
+    case "CAPTURE_FAILED":
+      return matchesGeneration(state, event) && state.phase === "capturing"
+        ? { ...state, phase: "error", errorMessage: event.message }
         : state;
 
     case "DELIVERY_SUCCEEDED":

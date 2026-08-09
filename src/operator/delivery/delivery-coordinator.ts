@@ -16,6 +16,7 @@ export interface DeliveryCoordinator {
     publicBaseUrl: string;
     generation: number;
     signal: AbortSignal;
+    onPendingSessionCreated?(id: string): void;
   }): Promise<IssuedSession>;
 }
 
@@ -33,6 +34,7 @@ export class EncryptedDeliveryCoordinator implements DeliveryCoordinator {
     publicBaseUrl: string;
     generation: number;
     signal: AbortSignal;
+    onPendingSessionCreated?(id: string): void;
   }): Promise<IssuedSession> {
     throwIfAborted(input.signal);
     const plain = new Uint8Array(await input.jpeg.arrayBuffer());
@@ -52,6 +54,7 @@ export class EncryptedDeliveryCoordinator implements DeliveryCoordinator {
 
         const pending = await this.api.createPending(ciphertext, input.signal);
         pendingId = pending.id;
+        input.onPendingSessionCreated?.(pendingId);
         throwIfAborted(input.signal);
 
         const id = pendingId;

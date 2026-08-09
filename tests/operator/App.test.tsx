@@ -1,0 +1,413 @@
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
+import { afterEach, describe, expect, it, vi } from "vitest";
+
+import { App, type AppServices, type RuntimePreflightStatus } from "../../src/operator/App.js";
+import type { CameraPort } from "../../src/operator/camera/camera-port.js";
+import { MemoryIssuedSessionRegistry } from "../../src/operator/delivery/issued-session-registry.js";
+import type { FrameManifest } from "../../src/operator/frames/frame-contract.js";
+import type { PreflightStatus } from "../../src/operator/components/PreflightBar.js";
+import type { IssuedSession } from "../../src/shared/contracts.js";
+
+const prompts: [string, string, string, string, string, string] = [
+  "첫 번째 포즈",
+  "두 번째 포즈",
+  "세 번째 포즈",
+  "네 번째 포즈",
+  "다섯 번째 포즈",
+  "여섯 번째 포즈",
+];
+
+const frame: FrameManifest = {
+  id: "basic",
+  label: "기본 프레임",
+  canvas: { width: 100, height: 100 },
+  jpegQuality: 0.9,
+  thumbnail: "/basic-thumbnail.svg",
+  overlay: "/basic-overlay.svg",
+  slots: [0, 1, 2, 3].map((index) => ({
+    x: index * 10,
+    y: 0,
+    width: 10,
+    height: 10,
+    rotation: 0,
+    fit: "cover" as const,
+  })) as FrameManifest["slots"],
+};
+
+const readyStatus: PreflightStatus = {
+  cameraReady: true,
+  tunnel: { state: "healthy", publicUrl: "https://booth.example", latencyMs: 12, error: null },
+  lastSuccessfulSweepAt: Date.now(),
+  framePackValid: true,
+  loadedPoseCount: 6,
+  joinUrlConfigured: true,
+  activeCiphertextCount: 0,
+};
+
+class FakeCamera implements CameraPort {
+  captureCount = 0;
+
+  async probe(): Promise<boolean> {
+    return true;
+  }
+
+  async start(_video: HTMLVideoElement): Promise<void> {}
+
+  async capture(): Promise<Blob> {
+    this.captureCount += 1;
+    return new Blob([`photo-${this.captureCount}`], { type: "image/jpeg" });
+  }
+
+  stop(): void {}
+
+  async finishSixShots(): Promise<void> {
+    await waitFor(() => expect(this.captureCount).toBe(6));
+  }
+}
+
+function createFakeServices(): AppServices {
+  const registry = new MemoryIssuedSessionRegistry();
+  const issued: IssuedSession = {
+    id: "issued-session",
+    publicToken: "public-token",
+    deliveryUrl: "https://booth.example/d/public-token#key=kept-out-of-app-state",
+    expiresAt: Date.now() + 600_000,
+  };
+
+  return {
+    camera: new FakeCamera(),
+    compositor: {
+      compose: vi.fn(async () => new Blob(["composed"], { type: "image/jpeg" })),
+    },
+    delivery: {
+      issue: vi.fn(async () => {
+        registry.add(issued, "kept-out-of-app-state");
+        return issued;
+      }),
+    },
+    registry,
+    api: {
+      createPending: vi.fn(),
+      activate: vi.fn(),
+      deletePending: vi.fn(async () => undefined),
+    },
+    frames: [frame],
+    prompts,
+    countdownTickMs: 1,
+    getPublicUrl: () => "https://booth.example",
+    preflight: {
+      readStatus: async () => readyStatus,
+    },
+  };
+}
+
+describe("App", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.useRealTimers();
+  });
+
+  it("runs welcome, six captures, four selections, frame, QR, and reset", async () => {
+    const user = userEvent.setup();
+    const fakeServices = createFakeServices();
+    render(<App services={fakeServices} />);
+
+    await screen.findByRole("button", { name: "체험 시작" });
+    await user.click(screen.getByRole("checkbox", { name: "모든 팀원이 촬영에 동의했습니다" }));
+    await user.click(screen.getByRole("button", { name: "체험 시작" }));
+    await (fakeServices.camera as FakeCamera).finishSixShots();
+    for (const number of [4, 1, 6, 3]) {
+      await user.click(screen.getByAltText(`촬영 사진 ${number}`));
+    }
+    await user.click(screen.getByRole("button", { name: "프레임 선택하기" }));
+    await user.click(screen.getByRole("radio", { name: "기본 프레임" }));
+    await user.click(screen.getByRole("button", { name: "이 프레임으로 사진 만들기" }));
+
+    expect(await screen.findByText("팀원 모두 각자 스캔할 수 있습니다")).toBeVisible();
+    await user.click(screen.getByRole("button", { name: "처음으로" }));
+    await user.click(screen.getByRole("button", { name: "확인" }));
+
+    expect(await screen.findByRole("button", { name: "체험 시작" })).toBeVisible();
+    expect(fakeServices.registry.activeCount()).toBe(1);
+  });
+
+  it("requires complete readiness and team consent before capture can start", async () => {
+    const user = userEvent.setup();
+    const services = createFakeServices();
+    render(<App services={services} />);
+
+    const start = await screen.findByRole("button", { name: "체험 시작" });
+    expect(start).toBeDisabled();
+    expect(screen.getByText("사진은 암호화되어 QR 발급 10분 후 삭제됩니다")).toBeVisible();
+
+    await user.click(screen.getByRole("checkbox", { name: "모든 팀원이 촬영에 동의했습니다" }));
+    expect(start).toBeEnabled();
+    await user.click(start);
+    expect(await screen.findByLabelText("사진 촬영")).toBeVisible();
+  });
+
+  it("keeps the reset control available in every application phase", async () => {
+    const user = userEvent.setup();
+    const services = createFakeServices();
+    const delivery = deferred<IssuedSession>();
+    services.delivery = { issue: vi.fn(() => delivery.promise) };
+    render(<App services={services} />);
+
+    const expectReset = () => expect(screen.getByRole("button", { name: "처음으로" })).toBeVisible();
+    expectReset();
+    await screen.findByRole("button", { name: "체험 시작" });
+    expectReset();
+    await startExperience(user);
+    expect(await screen.findByLabelText("사진 촬영")).toBeVisible();
+    expectReset();
+    await (services.camera as FakeCamera).finishSixShots();
+    expect(await screen.findByLabelText("사진 선택")).toBeVisible();
+    expectReset();
+    for (const number of [4, 1, 6, 3]) {
+      await user.click(screen.getByAltText(`촬영 사진 ${number}`));
+    }
+    await user.click(screen.getByRole("button", { name: "프레임 선택하기" }));
+    await user.click(screen.getByRole("radio", { name: "기본 프레임" }));
+    expect(await screen.findByLabelText("프레임 선택")).toBeVisible();
+    expectReset();
+    await user.click(screen.getByRole("button", { name: "이 프레임으로 사진 만들기" }));
+    expect(await screen.findByLabelText("사진 발급")).toBeVisible();
+    expectReset();
+
+    delivery.resolve(issuedSession());
+    expect(await screen.findByLabelText("QR 코드")).toBeVisible();
+    expectReset();
+  });
+
+  it("shows only retry and the global reset when readiness fails", async () => {
+    const services = createFakeServices();
+    services.preflight = {
+      readStatus: async () => ({
+        ...runtimeReadyStatus(),
+        tunnel: { state: "down", publicUrl: null, latencyMs: null, error: "health-failed" },
+      }),
+    };
+    render(<App services={services} />);
+
+    expect(await screen.findByRole("alert")).toBeVisible();
+    expect(screen.getAllByRole("button").map((button) => button.textContent)).toEqual([
+      "다시 시도",
+      "처음으로",
+    ]);
+  });
+
+  it("ignores preflight work from before reset", async () => {
+    const user = userEvent.setup();
+    const services = createFakeServices();
+    const firstRead = deferred<RuntimePreflightStatus>();
+    let reads = 0;
+    services.preflight = {
+      readStatus: async () => {
+        reads += 1;
+        return reads === 1 ? firstRead.promise : runtimeReadyStatus();
+      },
+    };
+    render(<App services={services} />);
+
+    await user.click(screen.getByRole("button", { name: "처음으로" }));
+    await user.click(screen.getByRole("button", { name: "확인" }));
+    expect(await screen.findByRole("button", { name: "체험 시작" })).toBeVisible();
+
+    await act(async () => firstRead.resolve(runtimeReadyStatus()));
+    expect(screen.getByRole("button", { name: "체험 시작" })).toBeVisible();
+  });
+
+  it("ignores a capture completing after reset and does not revive the old session", async () => {
+    const user = userEvent.setup();
+    const services = createFakeServices();
+    const camera = new BlockingCamera();
+    services.camera = camera;
+    render(<App services={services} />);
+
+    await startExperience(user);
+    await waitFor(() => expect(camera.captureStarted).toBe(1));
+    await reset(user);
+    expect(await screen.findByRole("button", { name: "체험 시작" })).toBeVisible();
+
+    camera.photo.resolve(new Blob(["old photo"], { type: "image/jpeg" }));
+    await act(async () => undefined);
+    expect(screen.getByRole("button", { name: "체험 시작" })).toBeVisible();
+    expect(screen.queryByLabelText("사진 선택")).not.toBeInTheDocument();
+  });
+
+  it("ignores delivery completion from before reset and preserves no QR for the old session", async () => {
+    const user = userEvent.setup();
+    const services = createFakeServices();
+    const delivery = deferred<IssuedSession>();
+    services.delivery = { issue: vi.fn(() => delivery.promise) };
+    render(<App services={services} />);
+
+    await startAndReachFrame(user, services);
+    await user.click(screen.getByRole("button", { name: "이 프레임으로 사진 만들기" }));
+    expect(await screen.findByLabelText("사진 발급")).toBeVisible();
+    await reset(user);
+    expect(await screen.findByRole("button", { name: "체험 시작" })).toBeVisible();
+
+    delivery.resolve(issuedSession());
+    await act(async () => undefined);
+    expect(screen.getByRole("button", { name: "체험 시작" })).toBeVisible();
+    expect(screen.queryByLabelText("QR 코드")).not.toBeInTheDocument();
+  });
+
+  it("disposes all six raw preview URLs immediately after activation", async () => {
+    const user = userEvent.setup();
+    const services = createFakeServices();
+    const createdUrls: string[] = [];
+    vi.spyOn(URL, "createObjectURL").mockImplementation(() => {
+      const url = `blob:raw-preview-${createdUrls.length + 1}`;
+      createdUrls.push(url);
+      return url;
+    });
+    const revoke = vi.spyOn(URL, "revokeObjectURL").mockImplementation(() => undefined);
+    render(<App services={services} />);
+
+    await startAndReachFrame(user, services);
+    await user.click(screen.getByRole("button", { name: "이 프레임으로 사진 만들기" }));
+    await screen.findByLabelText("QR 코드");
+
+    expect(revoke).toHaveBeenCalledTimes(6);
+    expect(revoke.mock.calls.map(([url]) => url)).toEqual(createdUrls);
+    expect(screen.queryByAltText("촬영 사진 1")).not.toBeInTheDocument();
+    expect(screen.queryByAltText("선택한 사진 1")).not.toBeInTheDocument();
+
+    await reset(user);
+    expect(await screen.findByRole("button", { name: "체험 시작" })).toBeVisible();
+    expect(revoke).toHaveBeenCalledTimes(6);
+    expect(services.registry.activeCount()).toBe(1);
+  });
+
+  it("starts delivery only once when the frame confirmation is activated twice", async () => {
+    const user = userEvent.setup();
+    const services = createFakeServices();
+    const delivery = deferred<IssuedSession>();
+    const issue = vi.fn(() => delivery.promise);
+    services.delivery = { issue };
+    render(<App services={services} />);
+
+    await startAndReachFrame(user, services);
+    const confirm = screen.getByRole("button", { name: "이 프레임으로 사진 만들기" });
+    await Promise.all([user.click(confirm), user.click(confirm)]);
+    await waitFor(() => expect(issue).toHaveBeenCalledOnce());
+  });
+
+  it("completes reset before three seconds of fake time and deletes a known pending session", async () => {
+    vi.useFakeTimers();
+    const services = createFakeServices();
+    const deletion = vi.fn(async () => undefined);
+    services.api.deletePending = deletion;
+    const delivery = deferred<IssuedSession>();
+    const issue = vi.fn(async (input: Parameters<AppServices["delivery"]["issue"]>[0]) => {
+      input.onPendingSessionCreated?.("pending-before-reset");
+      return delivery.promise;
+    });
+    services.delivery = {
+      issue,
+    };
+    render(<App services={services} />);
+
+    await flushReact();
+    fireEvent.click(screen.getByRole("checkbox", { name: "모든 팀원이 촬영에 동의했습니다" }));
+    fireEvent.click(screen.getByRole("button", { name: "체험 시작" }));
+    await flushReact();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(100);
+    });
+    expect((services.camera as FakeCamera).captureCount).toBe(6);
+    for (const number of [4, 1, 6, 3]) {
+      fireEvent.click(screen.getByAltText(`촬영 사진 ${number}`));
+    }
+    fireEvent.click(screen.getByRole("button", { name: "프레임 선택하기" }));
+    fireEvent.click(screen.getByRole("radio", { name: "기본 프레임" }));
+    fireEvent.click(screen.getByRole("button", { name: "이 프레임으로 사진 만들기" }));
+    expect(screen.getByLabelText("사진 발급")).toBeVisible();
+    await flushReact();
+    expect(issue).toHaveBeenCalledOnce();
+    fireEvent.click(screen.getByRole("button", { name: "처음으로" }));
+    fireEvent.click(screen.getByRole("button", { name: "확인" }));
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(2_999);
+    });
+
+    expect(screen.getByRole("button", { name: "체험 시작" })).toBeVisible();
+    expect(deletion).toHaveBeenCalledWith("pending-before-reset");
+  });
+});
+
+class BlockingCamera implements CameraPort {
+  captureStarted = 0;
+  photo = deferred<Blob>();
+
+  async probe(): Promise<boolean> {
+    return true;
+  }
+
+  async start(_video: HTMLVideoElement): Promise<void> {}
+
+  async capture(): Promise<Blob> {
+    this.captureStarted += 1;
+    return this.photo.promise;
+  }
+
+  stop(): void {}
+}
+
+async function startExperience(user: ReturnType<typeof userEvent.setup>): Promise<void> {
+  await screen.findByRole("button", { name: "체험 시작" });
+  await user.click(screen.getByRole("checkbox", { name: "모든 팀원이 촬영에 동의했습니다" }));
+  await user.click(screen.getByRole("button", { name: "체험 시작" }));
+}
+
+async function startAndReachFrame(user: ReturnType<typeof userEvent.setup>, services: AppServices): Promise<void> {
+  await startExperience(user);
+  await (services.camera as FakeCamera).finishSixShots();
+  for (const number of [4, 1, 6, 3]) {
+    await user.click(screen.getByAltText(`촬영 사진 ${number}`));
+  }
+  await user.click(screen.getByRole("button", { name: "프레임 선택하기" }));
+  await user.click(screen.getByRole("radio", { name: "기본 프레임" }));
+}
+
+async function reset(user: ReturnType<typeof userEvent.setup>): Promise<void> {
+  await user.click(screen.getByRole("button", { name: "처음으로" }));
+  await user.click(screen.getByRole("button", { name: "확인" }));
+}
+
+function runtimeReadyStatus(): RuntimePreflightStatus {
+  return {
+    tunnel: { state: "healthy", publicUrl: "https://booth.example", latencyMs: 12, error: null },
+    lastSuccessfulSweepAt: Date.now(),
+    activeCiphertextCount: 0,
+  };
+}
+
+function issuedSession(): IssuedSession {
+  return {
+    id: "issued-session",
+    publicToken: "public-token",
+    deliveryUrl: "https://booth.example/d/public-token#key=kept-out-of-app-state",
+    expiresAt: Date.now() + 600_000,
+  };
+}
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise;
+    reject = rejectPromise;
+  });
+  return { promise, resolve, reject };
+}
+
+async function flushReact(): Promise<void> {
+  await act(async () => {
+    await Promise.resolve();
+    await Promise.resolve();
+  });
+}
