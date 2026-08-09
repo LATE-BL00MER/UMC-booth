@@ -1,2 +1,8 @@
 .superpowers/
 .worktrees/
+node_modules/
+dist/
+runtime-data/
+playwright-report/
+test-results/
+.env
