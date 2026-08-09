@@ -136,6 +136,77 @@ function createHarness(overrides: Partial<RuntimeDependencies> = {}) {
   };
 }
 
+const controlledPreflightSteps = ["initialize", "initial sweep", "public listen", "private listen"] as const;
+type ControlledPreflightStep = typeof controlledPreflightSteps[number];
+
+function createControlledPreflightHarness(blockedStep: ControlledPreflightStep) {
+  const reached = deferred<void>();
+  const release = deferred<void>();
+  let shouldBlock = true;
+  let publicCloseCalls = 0;
+  let privateCloseCalls = 0;
+  let publicFactoryCalls = 0;
+  let privateFactoryCalls = 0;
+  const exit = vi.fn();
+
+  async function pass(step: ControlledPreflightStep): Promise<void> {
+    if (shouldBlock && blockedStep === step) {
+      reached.resolve();
+      await release.promise;
+    }
+  }
+
+  const harness = createHarness({
+    store: {
+      initialize: async () => pass("initialize"),
+      sweep: async () => {
+        await pass("initial sweep");
+        return { deletedPending: 0, deletedExpired: 0 };
+      },
+      purgeAll: async () => 0,
+      stats: async () => ({ pending: 0, active: 0, encryptedBytes: 0, lastSweepAt: 1_000 }),
+    },
+    createPublicServer: () => {
+      publicFactoryCalls += 1;
+      return {
+        listen: async () => {
+          await pass("public listen");
+          return "http://127.0.0.1:4174";
+        },
+        close: async () => { publicCloseCalls += 1; },
+      };
+    },
+    createPrivateServer: () => {
+      privateFactoryCalls += 1;
+      return {
+        listen: async () => {
+          await pass("private listen");
+          return "http://127.0.0.1:4173";
+        },
+        close: async () => { privateCloseCalls += 1; },
+      };
+    },
+    timers: undefined,
+    safetyStepTimeoutMs: 10,
+    startupStepTimeoutMs: 20,
+    exit,
+  });
+
+  return {
+    harness,
+    reached: reached.promise,
+    exit,
+    unblock() {
+      shouldBlock = false;
+      release.resolve();
+    },
+    publicCloseCalls: () => publicCloseCalls,
+    privateCloseCalls: () => privateCloseCalls,
+    publicFactoryCalls: () => publicFactoryCalls,
+    privateFactoryCalls: () => privateFactoryCalls,
+  };
+}
+
 describe("event runtime", () => {
   it("initializes and sweeps before binding loopback listeners, then tunnels only the public port", async () => {
     const harness = createHarness();
@@ -316,9 +387,9 @@ describe("event runtime", () => {
   it("attempts every bounded startup rollback step when earlier cleanup fails", async () => {
     vi.useFakeTimers();
     const privateCloseStarted = deferred<void>();
+    const releasePrivateClose = deferred<void>();
     const order: string[] = [];
     let privateCloseCalls = 0;
-    let privateCloseHangs = true;
     let tunnelStopFails = true;
     const harness = createHarness({
       store: {
@@ -337,7 +408,7 @@ describe("event runtime", () => {
           order.push("private:close");
           privateCloseCalls += 1;
           privateCloseStarted.resolve();
-          if (privateCloseHangs) await new Promise(() => undefined);
+          await releasePrivateClose.promise;
         },
       }),
       tunnel: {
@@ -366,12 +437,282 @@ describe("event runtime", () => {
       expect(order).toEqual(["purge", "tunnel:stop", "private:close", "purge", "public:close"]);
 
       order.splice(0);
-      privateCloseHangs = false;
       tunnelStopFails = false;
+      releasePrivateClose.resolve();
+      await vi.advanceTimersByTimeAsync(0);
       await runtime.stop({ purge: true });
-      expect(privateCloseCalls).toBe(2);
-      expect(order).toEqual(["purge", "tunnel:stop", "private:close", "purge"]);
+      expect(privateCloseCalls).toBe(1);
+      expect(order).toEqual(["purge", "tunnel:stop", "purge"]);
     } finally {
+      releasePrivateClose.resolve();
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not overwrite a listener whose startup rollback close is still pending", async () => {
+    vi.useFakeTimers();
+    const oldPrivateCloseStarted = deferred<void>();
+    const releaseOldPrivateClose = deferred<void>();
+    let publicFactoryCalls = 0;
+    let privateFactoryCalls = 0;
+    let privateListenCalls = 0;
+    let oldPrivateCloseCalls = 0;
+    let tunnelStartCalls = 0;
+    const harness = createHarness({
+      createPublicServer: () => {
+        publicFactoryCalls += 1;
+        return {
+          listen: async () => "http://127.0.0.1:4174",
+          close: async () => undefined,
+        };
+      },
+      createPrivateServer: () => {
+        privateFactoryCalls += 1;
+        const oldServer = privateFactoryCalls === 1;
+        return {
+          listen: async () => {
+            privateListenCalls += 1;
+            return "http://127.0.0.1:4173";
+          },
+          close: async () => {
+            if (!oldServer) return;
+            oldPrivateCloseCalls += 1;
+            oldPrivateCloseStarted.resolve();
+            await releaseOldPrivateClose.promise;
+          },
+        };
+      },
+      tunnel: {
+        start: async () => {
+          tunnelStartCalls += 1;
+          if (tunnelStartCalls === 1) throw new Error("startup failed");
+        },
+        stop: async () => undefined,
+        status: () => ({ state: "healthy", publicUrl: "https://booth.example", latencyMs: 1, error: null }),
+      },
+      timers: undefined,
+      safetyStepTimeoutMs: 10,
+    });
+    const runtime = createRuntime(harness.dependencies);
+
+    try {
+      const firstStart = runtime.start();
+      const firstFailure = firstStart.catch((error: unknown) => error);
+      await oldPrivateCloseStarted.promise;
+      await vi.advanceTimersByTimeAsync(10);
+      expect(await firstFailure).toBeInstanceOf(AggregateError);
+
+      await expect(runtime.start()).rejects.toThrow("lifecycle work is still pending");
+      expect(publicFactoryCalls).toBe(1);
+      expect(privateFactoryCalls).toBe(1);
+      expect(privateListenCalls).toBe(1);
+      expect(oldPrivateCloseCalls).toBe(1);
+
+      releaseOldPrivateClose.resolve();
+      await vi.advanceTimersByTimeAsync(0);
+      await runtime.start();
+
+      expect(publicFactoryCalls).toBe(2);
+      expect(privateFactoryCalls).toBe(2);
+      expect(privateListenCalls).toBe(2);
+      expect(oldPrivateCloseCalls).toBe(1);
+      expect((await runtime.getStatus()).acceptingCaptures).toBe(true);
+    } finally {
+      releaseOldPrivateClose.resolve();
+      vi.useRealTimers();
+    }
+  });
+
+  it("retries a failed rollback close before creating or binding any replacement listener", async () => {
+    let closeFails = true;
+    let publicFactoryCalls = 0;
+    let privateFactoryCalls = 0;
+    let oldPrivateCloseCalls = 0;
+    let tunnelStartCalls = 0;
+    const harness = createHarness({
+      createPublicServer: () => {
+        publicFactoryCalls += 1;
+        return {
+          listen: async () => "http://127.0.0.1:4174",
+          close: async () => undefined,
+        };
+      },
+      createPrivateServer: () => {
+        privateFactoryCalls += 1;
+        const oldServer = privateFactoryCalls === 1;
+        return {
+          listen: async () => "http://127.0.0.1:4173",
+          close: async () => {
+            if (!oldServer) return;
+            oldPrivateCloseCalls += 1;
+            if (closeFails) throw new Error("close failed");
+          },
+        };
+      },
+      tunnel: {
+        start: async () => {
+          tunnelStartCalls += 1;
+          if (tunnelStartCalls === 1) throw new Error("startup failed");
+        },
+        stop: async () => undefined,
+        status: () => ({ state: "healthy", publicUrl: "https://booth.example", latencyMs: 1, error: null }),
+      },
+    });
+    const runtime = createRuntime(harness.dependencies);
+
+    await expect(runtime.start()).rejects.toThrow("Runtime startup failed");
+    await expect(runtime.start()).rejects.toThrow("retained cleanup was incomplete");
+    expect(publicFactoryCalls).toBe(1);
+    expect(privateFactoryCalls).toBe(1);
+    expect(oldPrivateCloseCalls).toBe(2);
+
+    closeFails = false;
+    await runtime.start();
+    expect(oldPrivateCloseCalls).toBe(3);
+    expect(publicFactoryCalls).toBe(2);
+    expect(privateFactoryCalls).toBe(2);
+    expect((await runtime.getStatus()).acceptingCaptures).toBe(true);
+  });
+
+  for (const step of controlledPreflightSteps) {
+    it(`bounds ${step}, blocks restart until late work is owned, and safely restarts`, async () => {
+      vi.useFakeTimers();
+      const controlled = createControlledPreflightHarness(step);
+      const runtime = createRuntime(controlled.harness.dependencies);
+      let startSettled = false;
+      const starting = runtime.start();
+      const startupOutcome = starting.then(
+        () => { startSettled = true; return null; },
+        (error: unknown) => { startSettled = true; return error; },
+      );
+
+      try {
+        await controlled.reached;
+        await vi.advanceTimersByTimeAsync(20);
+
+        expect(startSettled).toBe(true);
+        expect(await startupOutcome).toMatchObject({ message: "Runtime startup failed" });
+        expect((await runtime.getStatus()).acceptingCaptures).toBe(false);
+        await expect(runtime.start()).rejects.toThrow("lifecycle work is still pending");
+
+        const publicCloseCallsBeforeLateSettlement = controlled.publicCloseCalls();
+        const privateCloseCallsBeforeLateSettlement = controlled.privateCloseCalls();
+        controlled.unblock();
+        await vi.advanceTimersByTimeAsync(0);
+
+        if (step === "public listen") {
+          expect(controlled.publicCloseCalls()).toBe(publicCloseCallsBeforeLateSettlement + 1);
+        }
+        if (step === "private listen") {
+          expect(controlled.privateCloseCalls()).toBe(privateCloseCallsBeforeLateSettlement + 1);
+        }
+
+        await runtime.start();
+        expect(controlled.publicFactoryCalls()).toBe(step === "initialize" || step === "initial sweep" ? 1 : 2);
+        expect(controlled.privateFactoryCalls()).toBe(step === "private listen" ? 2 : 1);
+        expect((await runtime.getStatus()).acceptingCaptures).toBe(true);
+        await runtime.stop({ purge: false });
+      } finally {
+        controlled.unblock();
+        await vi.advanceTimersByTimeAsync(20);
+        vi.useRealTimers();
+      }
+    });
+  }
+
+  for (const step of controlledPreflightSteps) {
+    it(`cancels ${step} promptly on a signal and completes the shared cleanup path`, async () => {
+      vi.useFakeTimers();
+      const controlled = createControlledPreflightHarness(step);
+      const runtime = createRuntime(controlled.harness.dependencies);
+      let startSettled = false;
+      const starting = runtime.start();
+      const startupOutcome = starting.then(
+        () => { startSettled = true; return null; },
+        (error: unknown) => { startSettled = true; return error; },
+      );
+
+      try {
+        await controlled.reached;
+        controlled.harness.signal("SIGINT");
+        const shutdown = runtime.requestShutdown();
+        await vi.advanceTimersByTimeAsync(0);
+
+        expect(startSettled).toBe(true);
+        expect(await startupOutcome).toMatchObject({ message: "Runtime startup failed" });
+        expect((await runtime.getStatus()).acceptingCaptures).toBe(false);
+
+        controlled.unblock();
+        await vi.advanceTimersByTimeAsync(0);
+        await shutdown;
+        expect(controlled.exit).toHaveBeenCalledWith(0);
+      } finally {
+        controlled.unblock();
+        await vi.advanceTimersByTimeAsync(20);
+        await Promise.allSettled([starting, runtime.requestShutdown()]);
+        vi.useRealTimers();
+      }
+    });
+  }
+
+  it("retains a late public listener when its close fails and cleans it before any replacement bind", async () => {
+    vi.useFakeTimers();
+    const listenReached = deferred<void>();
+    const releaseListen = deferred<void>();
+    let blockListen = true;
+    let closeFails = true;
+    let publicFactoryCalls = 0;
+    let oldCloseCalls = 0;
+    const harness = createHarness({
+      createPublicServer: () => {
+        publicFactoryCalls += 1;
+        const oldServer = publicFactoryCalls === 1;
+        return {
+          listen: async () => {
+            if (oldServer && blockListen) {
+              listenReached.resolve();
+              await releaseListen.promise;
+            }
+            return "http://127.0.0.1:4174";
+          },
+          close: async () => {
+            if (!oldServer) return;
+            oldCloseCalls += 1;
+            if (closeFails) throw new Error("close failed");
+          },
+        };
+      },
+      timers: undefined,
+      safetyStepTimeoutMs: 10,
+      startupStepTimeoutMs: 20,
+    });
+    const runtime = createRuntime(harness.dependencies);
+
+    try {
+      const starting = runtime.start();
+      const startupFailure = starting.catch((error: unknown) => error);
+      await listenReached.promise;
+      await vi.advanceTimersByTimeAsync(20);
+      expect(await startupFailure).toMatchObject({ message: "Runtime startup failed" });
+
+      blockListen = false;
+      releaseListen.resolve();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(oldCloseCalls).toBe(1);
+
+      await expect(runtime.start()).rejects.toThrow("retained cleanup was incomplete");
+      expect(publicFactoryCalls).toBe(1);
+      expect(oldCloseCalls).toBe(2);
+
+      closeFails = false;
+      await runtime.start();
+      expect(oldCloseCalls).toBe(3);
+      expect(publicFactoryCalls).toBe(2);
+      expect((await runtime.getStatus()).acceptingCaptures).toBe(true);
+    } finally {
+      blockListen = false;
+      closeFails = false;
+      releaseListen.resolve();
       vi.useRealTimers();
     }
   });
@@ -504,6 +845,47 @@ describe("event runtime", () => {
     await runtime.requestShutdown();
     expect(privateCloseCalls).toBe(2);
     expect(exit).toHaveBeenLastCalledWith(0);
+  });
+
+  it("blocks restart until a timed-out tunnel stop settles instead of starting overlapping cleanup", async () => {
+    vi.useFakeTimers();
+    const releaseTunnelStop = deferred<void>();
+    let tunnelStartCalls = 0;
+    let tunnelStopCalls = 0;
+    const harness = createHarness({
+      tunnel: {
+        start: async () => { tunnelStartCalls += 1; },
+        stop: async () => {
+          tunnelStopCalls += 1;
+          if (tunnelStopCalls === 1) await releaseTunnelStop.promise;
+        },
+        status: () => ({ state: "healthy", publicUrl: "https://booth.example", latencyMs: 1, error: null }),
+      },
+      timers: undefined,
+      safetyStepTimeoutMs: 10,
+    });
+    const runtime = createRuntime(harness.dependencies);
+
+    try {
+      await runtime.start();
+      const stopping = runtime.stop({ purge: true });
+      const stopFailure = stopping.catch((error: unknown) => error);
+      await vi.advanceTimersByTimeAsync(10);
+      expect(await stopFailure).toBeInstanceOf(AggregateError);
+
+      await expect(runtime.start()).rejects.toThrow("lifecycle work is still pending");
+      expect(tunnelStartCalls).toBe(1);
+      expect(tunnelStopCalls).toBe(1);
+
+      releaseTunnelStop.resolve();
+      await vi.advanceTimersByTimeAsync(0);
+      await runtime.start();
+      expect(tunnelStartCalls).toBe(2);
+      expect(tunnelStopCalls).toBe(1);
+    } finally {
+      releaseTunnelStop.resolve();
+      vi.useRealTimers();
+    }
   });
 
   it("waits for accepted aggregate counters before requestShutdown exits zero", async () => {
@@ -661,6 +1043,75 @@ describe("event runtime", () => {
       expect(exit).toHaveBeenCalledWith(1);
     } finally {
       hungSweep.resolve();
+      vi.useRealTimers();
+    }
+  });
+
+  it("blocks restart until a timed-out scheduled sweep settles and never overlaps or applies stale health", async () => {
+    vi.useFakeTimers();
+    const releaseOldSweep = deferred<void>();
+    let sweepCalls = 0;
+    let concurrentSweeps = 0;
+    let maximumConcurrentSweeps = 0;
+    let initializeCalls = 0;
+    let publicListenCalls = 0;
+    const harness = createHarness({
+      store: {
+        initialize: async () => { initializeCalls += 1; },
+        sweep: async () => {
+          sweepCalls += 1;
+          concurrentSweeps += 1;
+          maximumConcurrentSweeps = Math.max(maximumConcurrentSweeps, concurrentSweeps);
+          try {
+            if (sweepCalls === 2) {
+              await releaseOldSweep.promise;
+              throw new Error("stale scheduled failure");
+            }
+            return { deletedPending: 0, deletedExpired: 0 };
+          } finally {
+            concurrentSweeps -= 1;
+          }
+        },
+        purgeAll: async () => 0,
+        stats: async () => ({ pending: 0, active: 0, encryptedBytes: 0, lastSweepAt: 1_000 }),
+      },
+      createPublicServer: () => ({
+        listen: async () => { publicListenCalls += 1; return "http://127.0.0.1:4174"; },
+        close: async () => undefined,
+      }),
+      timers: undefined,
+      safetyStepTimeoutMs: 10,
+    });
+    const runtime = createRuntime(harness.dependencies);
+
+    try {
+      await runtime.start();
+      await vi.advanceTimersByTimeAsync(30_000);
+      expect(sweepCalls).toBe(2);
+
+      const stopping = runtime.stop({ purge: true });
+      const stopFailure = stopping.catch((error: unknown) => error);
+      await vi.advanceTimersByTimeAsync(10);
+      expect(await stopFailure).toBeInstanceOf(AggregateError);
+
+      await expect(runtime.start()).rejects.toThrow("lifecycle work is still pending");
+      expect(sweepCalls).toBe(2);
+      expect(initializeCalls).toBe(1);
+      expect(publicListenCalls).toBe(1);
+      expect((await runtime.getStatus()).acceptingCaptures).toBe(false);
+
+      releaseOldSweep.resolve();
+      await vi.advanceTimersByTimeAsync(0);
+      expect((await runtime.getStatus()).acceptingCaptures).toBe(false);
+
+      await runtime.start();
+      expect(sweepCalls).toBe(3);
+      expect(maximumConcurrentSweeps).toBe(1);
+      expect(initializeCalls).toBe(2);
+      expect(publicListenCalls).toBe(2);
+      expect((await runtime.getStatus()).acceptingCaptures).toBe(true);
+    } finally {
+      releaseOldSweep.resolve();
       vi.useRealTimers();
     }
   });
