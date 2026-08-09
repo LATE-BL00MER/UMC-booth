@@ -70,7 +70,7 @@ describe("public server", () => {
     expect(response.statusCode).toBe(200);
     expect(response.body).toContain("Download");
     expect(response.headers).toMatchObject(privacyHeaders);
-    expect(context.metrics.snapshot()).toEqual({ pages: 1, downloads: 0, decryptSuccess: 0, saveIntent: 0, joinClick: 0 });
+    expect(context.metrics.snapshot()).toEqual({ teamStarts: 0, completedQrIssuances: 0, pages: 1, downloads: 0, decryptSuccess: 0, saveIntent: 0, joinClick: 0 });
   });
 
   it("returns no-store ciphertext and 410 at expiry", async () => {
@@ -99,7 +99,7 @@ describe("public server", () => {
     }
     expect((await context.app.inject({ method: "POST", url: "/events", payload: { event: "unknown" } })).statusCode).toBe(400);
 
-    expect(context.metrics.snapshot()).toEqual({ pages: 0, downloads: 0, decryptSuccess: 10, saveIntent: 0, joinClick: 0 });
+    expect(context.metrics.snapshot()).toEqual({ teamStarts: 0, completedQrIssuances: 0, pages: 0, downloads: 0, decryptSuccess: 10, saveIntent: 0, joinClick: 0 });
   });
 
   it("rejects aggregate event bodies containing identifier-bearing extra fields", async () => {

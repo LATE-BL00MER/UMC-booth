@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { AppConfig } from "../../src/shared/config";
 import { buildPrivateServer } from "../../src/server/private-server";
+import { AggregateMetrics } from "../../src/server/metrics";
 import { FileSessionStore } from "../../src/server/session-store";
 import type { RuntimeStatus, RuntimeStatusProvider } from "../../src/server/types";
 
@@ -51,9 +52,10 @@ async function createPrivateApp() {
     sweepIntervalMs: 30_000,
     countdownTickMs: 1_000,
   };
-  const app = buildPrivateServer({ store, config, runtimeStatus, operatorBuildDir: join(root, "operator") });
+  const metrics = new AggregateMetrics();
+  const app = buildPrivateServer({ store, config, runtimeStatus, operatorBuildDir: join(root, "operator"), metrics });
   await app.ready();
-  return { app, availability, root, runtimeStatus, store };
+  return { app, availability, root, runtimeStatus, store, metrics };
 }
 
 describe("private server", () => {
@@ -111,6 +113,19 @@ describe("private server", () => {
       activeSessions: 3,
       encryptedBytes: 42,
       acceptingCaptures: true,
+    });
+  });
+
+  it("accepts only identifier-free aggregate operator metric transitions on the private listener", async () => {
+    const context = await createPrivateApp();
+    apps.push(context.app);
+
+    expect((await context.app.inject({ method: "POST", url: "/api/metrics", payload: { event: "team_start" } })).statusCode).toBe(204);
+    expect((await context.app.inject({ method: "POST", url: "/api/metrics", payload: { event: "completed_qr" } })).statusCode).toBe(204);
+    expect((await context.app.inject({ method: "POST", url: "/api/metrics", payload: { event: "team_start", sessionId: "forbidden" } })).statusCode).toBe(400);
+    expect((await context.app.inject({ method: "GET", url: "/api/metrics" })).json()).toMatchObject({
+      teamStarts: 1,
+      completedQrIssuances: 1,
     });
   });
 

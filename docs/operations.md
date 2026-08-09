@@ -66,8 +66,25 @@ During rehearsals and hourly during the event, inspect the configured session di
 
 ## Shutdown
 
-At closing, block new teams and let the final team’s ten-minute timer finish. Choose `운영 종료 및 전체 삭제`, confirm the operator has completed deletion, and verify that the session directory is empty. Only then stop the booth process and power/network equipment.
+At closing, block new teams and wait for the final displayed QR's full 10-minute timer to finish. Then, from the event MacBook, request deletion through the loopback-only private listener (the configured default private port is `4173`):
+
+```bash
+curl --fail --silent --show-error -X POST http://127.0.0.1:4173/api/shutdown \
+  -H 'content-type: application/json' \
+  --data '{"confirm":"DELETE_ALL"}'
+```
+
+Wait for the process to complete its deletion, then verify the configured default session directory (`runtime-data/sessions`) is empty:
+
+```bash
+test -d runtime-data/sessions
+test -z "$(find runtime-data/sessions -mindepth 1 -maxdepth 1 -print -quit)"
+```
+
+Only after both commands succeed should staff stop the booth process and power/network equipment.
 
 ## After the event
 
 Record aggregate counts only: team starts, completed QRs, successful decryptions, save intents, join clicks, and UTM visits. Compare the relevant rates against the 90% team-start-to-completed-QR target, the 95% successful-decryption target, and the 30% join-click target. Do not export photos, session identifiers, or any recipient-level records.
+
+Before doors open, save the local aggregate `/api/metrics` snapshot as the event baseline; record the same final snapshot after shutdown. It contains counters only, never session IDs, QR URLs, tokens, keys, or participant data.

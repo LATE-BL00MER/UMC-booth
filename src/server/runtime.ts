@@ -300,6 +300,8 @@ export function createRuntime(deps: RuntimeDependencies): EventRuntime {
 
     try {
       await runPreflightStep(context, "store initialize", () => deps.store.initialize());
+      // The local tunnel is a test-only disposable mode; production/development startup
+      // never purges active delivery sessions merely because a listener cannot bind.
       if (deps.config.tunnelMode === "local") {
         await runPreflightStep(context, "local startup purge", () => deps.store.purgeAll());
       }
@@ -502,12 +504,10 @@ export function createRuntime(deps: RuntimeDependencies): EventRuntime {
     }
     removeSignalHandlers();
     const errors: unknown[] = [];
-    await attempt(() => deps.store.purgeAll(), "startup initial purge", errors);
     await stopTunnel("startup tunnel stop", errors);
     if (privateServer !== null) {
       await closeServer(privateServer, "private", "startup private listener close", errors);
     }
-    await attempt(() => deps.store.purgeAll(), "startup definitive purge", errors);
     if (publicServer !== null) {
       await closeServer(publicServer, "public", "startup public listener close", errors);
     }

@@ -6,6 +6,7 @@ import type { AppConfig } from "../shared/config";
 import { safeStatusFor, sendSafeError } from "./safe-error";
 import type { FileSessionStore } from "./session-store";
 import type { RuntimeStatusProvider } from "./types";
+import { AggregateMetrics } from "./metrics";
 
 const ciphertextContentType = "application/octet-stream";
 const bodyLimit = 12 * 1024 * 1024;
@@ -15,10 +16,12 @@ export interface PrivateServerDependencies {
   config: AppConfig;
   runtimeStatus: RuntimeStatusProvider;
   operatorBuildDir: string;
+  metrics?: AggregateMetrics;
 }
 
 export function buildPrivateServer(deps: PrivateServerDependencies): FastifyInstance {
   const app = Fastify({ logger: false, bodyLimit });
+  const metrics = deps.metrics ?? new AggregateMetrics();
 
   app.setNotFoundHandler((_request, reply) => sendSafeError(reply, 404));
   app.setErrorHandler((error, _request, reply) => sendSafeError(reply, hasStatusCode(error, 403) ? 404 : safeStatusFor(error)));
@@ -59,6 +62,16 @@ export function buildPrivateServer(deps: PrivateServerDependencies): FastifyInst
     countdownTickMs: deps.config.countdownTickMs,
     exposeDeliveryUrl: deps.config.nodeEnv === "test",
   }));
+
+  app.get("/api/metrics", async () => metrics.snapshot());
+
+  app.post("/api/metrics", async (request, reply) => {
+    const event = operatorMetricEvent(request.body);
+    if (event === null) return sendSafeError(reply, 400);
+    if (event === "team_start") metrics.recordTeamStart();
+    else metrics.recordCompletedQr();
+    return reply.code(204).send();
+  });
 
   app.post("/api/sessions", async (request, reply) => {
     if (!(await deps.runtimeStatus.getStatus()).acceptingCaptures) {
@@ -131,4 +144,9 @@ function isShutdownRequest(value: unknown): value is { confirm: "DELETE_ALL" } {
 
 function hasStatusCode(error: unknown, statusCode: number): boolean {
   return typeof error === "object" && error !== null && "statusCode" in error && error.statusCode === statusCode;
+}
+
+function operatorMetricEvent(value: unknown): "team_start" | "completed_qr" | null {
+  if (!value || typeof value !== "object" || Object.keys(value).length !== 1 || !("event" in value)) return null;
+  return value.event === "team_start" || value.event === "completed_qr" ? value.event : null;
 }

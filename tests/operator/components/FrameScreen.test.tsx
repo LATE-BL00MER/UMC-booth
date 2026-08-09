@@ -58,6 +58,7 @@ describe("FrameScreen", () => {
         selectedIds={["p4", "p1", "p3", "p2"]}
         frames={frames}
         selectedFrameId={null}
+        compositor={{ compose: vi.fn() }}
         onFrameSelect={onFrameSelect}
         onContinue={onContinue}
       />,
@@ -83,6 +84,7 @@ describe("FrameScreen", () => {
         selectedIds={["p4", "p1", "p3", "p2"]}
         frames={frames}
         selectedFrameId="basic"
+        compositor={{ compose: vi.fn(async () => new Blob(["preview"], { type: "image/jpeg" })) }}
         onFrameSelect={onFrameSelect}
         onContinue={onContinue}
       />,
@@ -99,11 +101,69 @@ describe("FrameScreen", () => {
         selectedIds={["p1", "p2", "p3", "p4"]}
         frames={frames}
         selectedFrameId="missing"
+        compositor={{ compose: vi.fn() }}
         onFrameSelect={() => undefined}
         onContinue={() => undefined}
       />,
     );
 
     expect(screen.getByRole("button", { name: "이 프레임으로 사진 만들기" })).toBeDisabled();
+  });
+
+  it("composes the selected four photos in selection order and disposes a replaced preview", async () => {
+    const user = userEvent.setup();
+    const compose = vi.fn(async (_input: { photos: readonly Blob[]; frame: FrameManifest }) => new Blob(["preview"], { type: "image/jpeg" }));
+    const createObjectURL = vi.fn(() => "blob:composed-preview");
+    const revokeObjectURL = vi.fn();
+    const { rerender, unmount } = render(
+      <FrameScreen
+        photos={photos}
+        selectedIds={["p4", "p1", "p3", "p2"]}
+        frames={frames}
+        selectedFrameId={null}
+        compositor={{ compose }}
+        createObjectURL={createObjectURL}
+        revokeObjectURL={revokeObjectURL}
+        onFrameSelect={() => undefined}
+        onContinue={() => undefined}
+      />,
+    );
+
+    rerender(
+      <FrameScreen
+        photos={photos}
+        selectedIds={["p4", "p1", "p3", "p2"]}
+        frames={frames}
+        selectedFrameId="basic"
+        compositor={{ compose }}
+        createObjectURL={createObjectURL}
+        revokeObjectURL={revokeObjectURL}
+        onFrameSelect={() => undefined}
+        onContinue={() => undefined}
+      />,
+    );
+    expect(await screen.findByAltText("선택한 프레임 합성 미리보기")).toHaveAttribute("src", "blob:composed-preview");
+    expect((await compose.mock.results[0]!.value).type).toBe("image/jpeg");
+    const [input] = compose.mock.calls[0]!;
+    expect(await Promise.all(input.photos.map((photo) => photo.text()))).toEqual(["photo 4", "photo 1", "photo 3", "photo 2"]);
+
+    await user.click(screen.getByRole("radio", { name: "밝은 프레임" }));
+    rerender(
+      <FrameScreen
+        photos={photos}
+        selectedIds={["p4", "p1", "p3", "p2"]}
+        frames={frames}
+        selectedFrameId="bright"
+        compositor={{ compose }}
+        createObjectURL={createObjectURL}
+        revokeObjectURL={revokeObjectURL}
+        onFrameSelect={() => undefined}
+        onContinue={() => undefined}
+      />,
+    );
+    await screen.findByAltText("선택한 프레임 합성 미리보기");
+    expect(revokeObjectURL).toHaveBeenCalledWith("blob:composed-preview");
+    unmount();
+    expect(revokeObjectURL).toHaveBeenCalledTimes(2);
   });
 });

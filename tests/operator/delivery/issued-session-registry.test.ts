@@ -62,4 +62,19 @@ describe("MemoryIssuedSessionRegistry", () => {
     expect(registry.prune(10)).toBe(1);
     expect(registry.activeCount()).toBe(1);
   });
+
+  it("reissues one unexpired history entry without writing the key to browser storage", () => {
+    const registry = new MemoryIssuedSessionRegistry();
+    registry.add(
+      { id: "active", publicToken: "two", deliveryUrl: "old", expiresAt: Date.now() + 60_000 },
+      "key-two",
+    );
+
+    expect(registry.reissue("active", "https://replacement.example")).toMatchObject({
+      id: "active",
+      deliveryUrl: "https://replacement.example/d/two#key=key-two",
+    });
+    expect(window.sessionStorage.length).toBe(0);
+    expect(window.localStorage.length).toBe(0);
+  });
 });

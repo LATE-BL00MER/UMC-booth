@@ -261,6 +261,31 @@ describe("event runtime", () => {
     expect(harness.order).toEqual([]);
   });
 
+  it("preserves existing active sessions when a production listener fails during startup", async () => {
+    let purgeCalls = 0;
+    const harness = createHarness({
+      config: config({ nodeEnv: "production" }),
+      store: {
+        initialize: async () => undefined,
+        sweep: async () => ({ deletedPending: 0, deletedExpired: 0 }),
+        purgeAll: async () => {
+          purgeCalls += 1;
+          return 0;
+        },
+        stats: async () => ({ pending: 0, active: 1, encryptedBytes: 42, lastSweepAt: 1_000 }),
+      },
+      createPublicServer: () => ({
+        listen: async () => { throw new Error("port already in use"); },
+        close: async () => undefined,
+      }),
+    });
+
+    await expect(createRuntime(harness.dependencies).start()).rejects.toThrow("Runtime startup failed");
+
+    // Failed startup owns listeners/tunnel only; existing encrypted active sessions stay available.
+    expect(purgeCalls).toBe(0);
+  });
+
   it("denies captures after a scheduled sweep fails and restores them after the next success", async () => {
     const harness = createHarness();
     const runtime = createRuntime(harness.dependencies);
@@ -294,7 +319,7 @@ describe("event runtime", () => {
     });
   });
 
-  it("times out a never-healthy tunnel startup and rolls back listeners and storage", async () => {
+  it("times out a never-healthy tunnel startup and rolls back owned listeners without purging storage", async () => {
     vi.useFakeTimers();
     const tunnelStartCalled = deferred<void>();
     const order: string[] = [];
@@ -337,10 +362,8 @@ describe("event runtime", () => {
         "public:listen",
         "private:listen",
         "tunnel:start",
-        "store:purge-all",
         "tunnel:stop",
         "private:close",
-        "store:purge-all",
         "public:close",
       ]);
       expect((await runtime.getStatus()).acceptingCaptures).toBe(false);
@@ -550,7 +573,7 @@ describe("event runtime", () => {
       expect(failure).toBeInstanceOf(AggregateError);
       expect(String(failure)).toBe("AggregateError: Runtime startup failed");
       expect(String(failure)).not.toContain("sensitive");
-      expect(order).toEqual(["purge", "tunnel:stop", "private:close", "purge", "public:close"]);
+      expect(order).toEqual(["tunnel:stop", "private:close", "public:close"]);
 
       order.splice(0);
       tunnelStopFails = false;

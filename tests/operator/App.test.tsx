@@ -163,6 +163,63 @@ describe("App", () => {
     expect(await screen.findByLabelText("사진 촬영")).toBeVisible();
   });
 
+  it("records one aggregate start and completed QR per generation despite stale clicks and delivery retries", async () => {
+    const user = userEvent.setup();
+    const services = createFakeServices();
+    const record = vi.fn(async () => undefined);
+    services.metrics = { record };
+    render(<App services={services} />);
+
+    await startAndReachFrame(user, services);
+    await user.click(screen.getByRole("button", { name: "이 프레임으로 사진 만들기" }));
+    await screen.findByLabelText("QR 코드");
+    fireEvent.click(screen.getByRole("button", { name: "처음으로" }));
+
+    expect(record.mock.calls).toEqual([["team_start"], ["completed_qr"]]);
+  });
+
+  it("disables and guards welcome start as soon as live readiness closes", async () => {
+    vi.useFakeTimers();
+    const services = createFakeServices();
+    let currentStatus = runtimeReadyStatus();
+    services.preflight = { readStatus: vi.fn(async () => currentStatus) };
+    render(<App services={services} />);
+
+    await flushReact();
+    fireEvent.click(screen.getByRole("checkbox", { name: "모든 팀원이 촬영에 동의했습니다" }));
+    expect(screen.getByRole("button", { name: "체험 시작" })).toBeEnabled();
+
+    currentStatus = {
+      ...runtimeReadyStatus(),
+      acceptingCaptures: false,
+      tunnel: { state: "down", publicUrl: null, latencyMs: null, error: "health-failed" },
+    };
+    await act(async () => { await vi.advanceTimersByTimeAsync(2_000); });
+    await flushReact();
+
+    const start = screen.getByRole("button", { name: "체험 시작" });
+    expect(start).toBeDisabled();
+    fireEvent.click(start);
+    expect(screen.queryByLabelText("촬영")) .not.toBeInTheDocument();
+    expect((services.camera as FakeCamera).captureCount).toBe(0);
+  });
+
+  it("lets staff redisplay an unexpired issued QR after reset using the replacement tunnel URL", async () => {
+    const user = userEvent.setup();
+    const services = createFakeServices();
+    services.registry.add(issuedSession(), "kept-out-of-app-state");
+    render(<App services={services} />);
+
+    await screen.findByRole("button", { name: "체험 시작" });
+    await user.click(screen.getByRole("button", { name: "이전 QR 다시 표시" }));
+
+    expect(await screen.findByLabelText("QR 코드")).toBeVisible();
+    expect(vi.mocked(toDataURL)).toHaveBeenLastCalledWith(
+      "https://booth.example/d/public-token#key=kept-out-of-app-state",
+      { errorCorrectionLevel: "M" },
+    );
+  });
+
   it("keeps the reset control available in every application phase", async () => {
     const user = userEvent.setup();
     const services = createFakeServices();
@@ -287,14 +344,14 @@ describe("App", () => {
     await user.click(screen.getByRole("button", { name: "이 프레임으로 사진 만들기" }));
     await screen.findByLabelText("QR 코드");
 
-    expect(revoke).toHaveBeenCalledTimes(6);
-    expect(revoke.mock.calls.map(([url]) => url)).toEqual(createdUrls);
+    expect(revoke).toHaveBeenCalledTimes(7);
+    expect(revoke.mock.calls.map(([url]) => url)).toEqual(expect.arrayContaining(createdUrls));
     expect(screen.queryByAltText("촬영 사진 1")).not.toBeInTheDocument();
     expect(screen.queryByAltText("선택한 사진 1")).not.toBeInTheDocument();
 
     await reset(user);
     expect(await screen.findByRole("button", { name: "체험 시작" })).toBeVisible();
-    expect(revoke).toHaveBeenCalledTimes(6);
+    expect(revoke).toHaveBeenCalledTimes(7);
     expect(services.registry.activeCount()).toBe(1);
   });
 

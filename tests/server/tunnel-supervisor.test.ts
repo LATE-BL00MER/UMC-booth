@@ -196,6 +196,48 @@ describe("TunnelSupervisor", () => {
     expect(harness.timers.delays).toContain(5_000);
   });
 
+  it("probes a healthy external route repeatedly and restarts after two consecutive failures", async () => {
+    const timers = new TestTimers();
+    const children: TestChild[] = [];
+    let probes = 0;
+    const supervisor = new TunnelSupervisor({
+      spawn: () => {
+        const child = new TestChild();
+        children.push(child);
+        return child;
+      },
+      fetch: async () => {
+        probes += 1;
+        return new Response("route unavailable", { status: probes === 1 ? 200 : 503 });
+      },
+      timers,
+    });
+
+    const started = supervisor.start("http://127.0.0.1:4174");
+    children[0]!.emitLine("https://calm-river.trycloudflare.com");
+    await started;
+    expect(probes).toBe(1);
+
+    timers.runNext(15_000);
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(supervisor.status()).toMatchObject({ state: "healthy" });
+    timers.runNext(15_000);
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(probes).toBe(3);
+    expect(supervisor.status()).toEqual({
+      state: "down",
+      publicUrl: null,
+      latencyMs: null,
+      error: "health-failed",
+    });
+    expect(children[0]!.killed).toBe(1);
+    expect(timers.delays).toContain(1_000);
+  });
+
   it("rejects startup once and does not busy-loop when cloudflared is missing", async () => {
     const timers = new TestTimers();
     const missingBinary = Object.assign(new Error("missing"), { code: "ENOENT" });

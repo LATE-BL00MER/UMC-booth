@@ -5,6 +5,22 @@ import { describe, expect, it } from "vitest";
 import { AggregateMetrics, type MetricsFileSystem } from "../../src/server/metrics";
 
 describe("aggregate metrics persistence", () => {
+  it("persists aggregate team starts and completed QR issuances without session identifiers", async () => {
+    const root = await mkdtemp(join(tmpdir(), "umc-metrics-operator-"));
+    const path = join(root, "metrics.json");
+    const metrics = new AggregateMetrics({ now: () => 7, persistencePath: path });
+    await metrics.initialize();
+
+    metrics.recordTeamStart();
+    metrics.recordCompletedQr();
+    await metrics.drainPersistence();
+
+    expect(metrics.snapshot()).toMatchObject({ teamStarts: 1, completedQrIssuances: 1 });
+    expect(await readFile(path, "utf8")).not.toMatch(/session|token|key|id/i);
+    const restarted = new AggregateMetrics({ persistencePath: path });
+    await restarted.initialize();
+    expect(restarted.snapshot()).toMatchObject({ teamStarts: 1, completedQrIssuances: 1 });
+  });
   it("atomically persists only aggregate counters and updatedAt after every accepted metric", async () => {
     const root = await mkdtemp(join(tmpdir(), "umc-metrics-"));
     const path = join(root, "runtime-data", "metrics.json");
@@ -19,6 +35,8 @@ describe("aggregate metrics persistence", () => {
 
     const persisted: unknown = JSON.parse(await readFile(path, "utf8"));
     expect(persisted).toEqual({
+      teamStarts: 0,
+      completedQrIssuances: 0,
       pages: 1,
       downloads: 0,
       decryptSuccess: 0,
@@ -27,11 +45,13 @@ describe("aggregate metrics persistence", () => {
       updatedAt: 1_235,
     });
     expect(Object.keys(persisted as object).sort()).toEqual([
+      "completedQrIssuances",
       "decryptSuccess",
       "downloads",
       "joinClick",
       "pages",
       "saveIntent",
+      "teamStarts",
       "updatedAt",
     ]);
     expect(await readdir(join(root, "runtime-data"))).toEqual(["metrics.json"]);
@@ -93,8 +113,10 @@ describe("aggregate metrics persistence", () => {
     metrics.record("join_click");
     await metrics.drainPersistence();
 
-    expect(metrics.snapshot()).toEqual({ pages: 7, downloads: 6, decryptSuccess: 5, saveIntent: 4, joinClick: 4 });
+    expect(metrics.snapshot()).toEqual({ teamStarts: 0, completedQrIssuances: 0, pages: 7, downloads: 6, decryptSuccess: 5, saveIntent: 4, joinClick: 4 });
     expect(JSON.parse(await readFile(path, "utf8"))).toEqual({
+      teamStarts: 0,
+      completedQrIssuances: 0,
       pages: 7,
       downloads: 6,
       decryptSuccess: 5,
@@ -119,7 +141,7 @@ describe("aggregate metrics persistence", () => {
     const metrics = new AggregateMetrics({ persistencePath: path });
 
     await expect(metrics.initialize()).rejects.toThrow("Invalid aggregate metrics");
-    expect(metrics.snapshot()).toEqual({ pages: 0, downloads: 0, decryptSuccess: 0, saveIntent: 0, joinClick: 0 });
+    expect(metrics.snapshot()).toEqual({ teamStarts: 0, completedQrIssuances: 0, pages: 0, downloads: 0, decryptSuccess: 0, saveIntent: 0, joinClick: 0 });
   });
 
   it("coalesces accepted counters behind one bounded persistence pump while a write stalls", async () => {

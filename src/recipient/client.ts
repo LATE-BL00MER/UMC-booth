@@ -13,6 +13,7 @@ export interface RecipientDependencies {
   createObjectURL: (blob: Blob) => string;
   decryptPhoto: typeof decryptPhoto;
   fetch: typeof fetch;
+  history: Pick<History, "replaceState">;
   importKeyFragment: typeof importKeyFragment;
   joinSiteUrl?: unknown;
   location: URL;
@@ -34,6 +35,7 @@ const defaultDependencies: RecipientDependencies = {
   createObjectURL: (blob) => URL.createObjectURL(blob),
   decryptPhoto,
   fetch: window.fetch.bind(window),
+  history: window.history,
   importKeyFragment,
   joinSiteUrl: window.__UMC_JOIN_SITE_URL__,
   location: new URL(window.location.href),
@@ -61,6 +63,10 @@ export async function bootstrapRecipientPage(
     renderMessage(root, lifecycle, "사진을 열 수 없습니다");
     return teardown;
   }
+
+  // The fragment never reaches the server, but it must also leave local browser history
+  // before any request or cryptographic work can expose a recoverable page URL.
+  dependencies.history.replaceState(null, "", `${dependencies.location.pathname}${dependencies.location.search}`);
 
   let response: Response;
   try {

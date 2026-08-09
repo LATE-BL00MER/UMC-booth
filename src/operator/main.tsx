@@ -96,6 +96,17 @@ function createBrowserServices(
         };
       },
     },
+    metrics: {
+      async record(event) {
+        const response = await fetch("/api/metrics", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ event }),
+          credentials: "same-origin",
+        });
+        if (!response.ok) throw new Error("Could not record aggregate operator metric");
+      },
+    },
   };
 }
 

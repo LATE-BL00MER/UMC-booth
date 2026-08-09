@@ -5,6 +5,8 @@ import { dirname } from "node:path";
 export type AggregateEvent = "decrypt_success" | "save_intent" | "join_click";
 
 export interface AggregateMetricsSnapshot {
+  teamStarts: number;
+  completedQrIssuances: number;
   pages: number;
   downloads: number;
   decryptSuccess: number;
@@ -41,6 +43,8 @@ const defaultTimers: MetricsTimers = {
 const DEFAULT_DRAIN_TIMEOUT_MS = 5_000;
 
 const emptySnapshot = (): AggregateMetricsSnapshot => ({
+  teamStarts: 0,
+  completedQrIssuances: 0,
   pages: 0,
   downloads: 0,
   decryptSuccess: 0,
@@ -111,6 +115,18 @@ export class AggregateMetrics {
   recordDownload(): void {
     this.assertInitialized();
     this.counters.downloads += 1;
+    this.markDirty();
+  }
+
+  recordTeamStart(): void {
+    this.assertInitialized();
+    this.counters.teamStarts += 1;
+    this.markDirty();
+  }
+
+  recordCompletedQr(): void {
+    this.assertInitialized();
+    this.counters.completedQrIssuances += 1;
     this.markDirty();
   }
 
@@ -225,22 +241,28 @@ export class AggregateMetrics {
   }
 }
 
-const persistedKeys = ["decryptSuccess", "downloads", "joinClick", "pages", "saveIntent", "updatedAt"] as const;
+const persistedKeys = ["completedQrIssuances", "decryptSuccess", "downloads", "joinClick", "pages", "saveIntent", "teamStarts", "updatedAt"] as const;
+const legacyPersistedKeys = ["decryptSuccess", "downloads", "joinClick", "pages", "saveIntent", "updatedAt"] as const;
 
 function parsePersistedMetrics(value: unknown): AggregateMetricsSnapshot {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     throw new Error("Invalid aggregate metrics");
   }
   const record = value as Record<string, unknown>;
-  if (Object.keys(record).sort().join(",") !== [...persistedKeys].sort().join(",")) {
+  const keys = Object.keys(record).sort().join(",");
+  const currentKeys = [...persistedKeys].sort().join(",");
+  const legacyKeys = [...legacyPersistedKeys].sort().join(",");
+  if (keys !== currentKeys && keys !== legacyKeys) {
     throw new Error("Invalid aggregate metrics");
   }
-  for (const key of persistedKeys) {
+  for (const key of legacyPersistedKeys) {
     if (!Number.isSafeInteger(record[key]) || (record[key] as number) < 0) {
       throw new Error("Invalid aggregate metrics");
     }
   }
   return {
+    teamStarts: (record.teamStarts as number | undefined) ?? 0,
+    completedQrIssuances: (record.completedQrIssuances as number | undefined) ?? 0,
     pages: record.pages as number,
     downloads: record.downloads as number,
     decryptSuccess: record.decryptSuccess as number,

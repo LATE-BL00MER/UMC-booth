@@ -28,6 +28,12 @@ const RESET_PENDING_DELETE_TIMEOUT_MS = 500;
 const RESET_PREFLIGHT_TIMEOUT_MS = 2_000;
 const STATUS_POLL_INTERVAL_MS = 2_000;
 
+export type OperatorMetricEvent = "team_start" | "completed_qr";
+
+export interface OperatorMetricsPort {
+  record(event: OperatorMetricEvent): Promise<void>;
+}
+
 export interface RuntimePreflightStatus {
   tunnel: PreflightStatus["tunnel"];
   acceptingCaptures: boolean;
@@ -52,6 +58,7 @@ export interface AppServices {
   exposeDeliveryUrl?: boolean;
   getPublicUrl(): string | null;
   preflight: PreflightPort;
+  metrics?: OperatorMetricsPort;
 }
 
 export function App({ services }: { services: AppServices }) {
@@ -64,6 +71,11 @@ export function App({ services }: { services: AppServices }) {
   const mountedServices = useRef<AppServices | null>(null);
   const resetPromise = useRef<Promise<void> | null>(null);
   const [preflightStatus, setPreflightStatus] = useState<PreflightStatus | null>(null);
+  const [acceptingLive, setAcceptingLive] = useState(false);
+  const acceptingLiveRef = useRef(false);
+  const [issuedHistory, setIssuedHistory] = useState(() => services.registry.list());
+  const startedMetricGenerations = useRef(new Set<number>());
+  const completedMetricGenerations = useRef(new Set<number>());
 
   const dispatch = useCallback((event: BoothEvent) => {
     if (!mounted.current) return;
@@ -75,12 +87,16 @@ export function App({ services }: { services: AppServices }) {
     const publicUrl = runtimeStatus.acceptingCaptures && runtimeStatus.tunnel.state === "healthy"
       ? runtimeStatus.tunnel.publicUrl
       : null;
+    const accepting = publicUrl !== null;
+    acceptingLiveRef.current = accepting;
+    setAcceptingLive(accepting);
     if (publicUrl === null) {
       validatedPublicUrl.current = null;
       return;
     }
     if (lastHealthyPublicUrl.current !== null && lastHealthyPublicUrl.current !== publicUrl) {
       const reissued = services.registry.reissueAll(publicUrl);
+      setIssuedHistory(services.registry.list());
       const currentIssued = stateRef.current.issuedSession;
       const replacement = currentIssued === null
         ? null
@@ -149,6 +165,7 @@ export function App({ services }: { services: AppServices }) {
       }
 
       dispatch({ type: "RESET_CONFIRMED" });
+      setIssuedHistory(services.registry.list());
       currentAbortController.current = new AbortController();
       const controller = currentAbortController.current;
       const completed = await completesBefore(runPreflight(), RESET_PREFLIGHT_TIMEOUT_MS);
@@ -202,6 +219,10 @@ export function App({ services }: { services: AppServices }) {
         ? services.registry.reissueAll(latestPublicUrl).find((candidate) => candidate.id === issued.id) ?? issued
         : issued;
 
+      if (!completedMetricGenerations.current.has(generation)) {
+        completedMetricGenerations.current.add(generation);
+        void services.metrics?.record("completed_qr").catch(() => undefined);
+      }
       revokePreviews(currentState);
       dispatch({ type: "DELIVERY_SUCCEEDED", generation, issued: displayedIssued });
     } catch (error) {
@@ -215,6 +236,28 @@ export function App({ services }: { services: AppServices }) {
     dispatch({ type: "FRAME_CONFIRMED" });
     void startDelivery();
   }, [dispatch, startDelivery]);
+
+  const redisplayIssuedSession = useCallback((id: string) => {
+    const publicUrl = validatedPublicUrl.current;
+    if (!acceptingLiveRef.current || publicUrl === null) return;
+    const issued = services.registry.reissue(id, publicUrl);
+    if (!issued) {
+      setIssuedHistory(services.registry.list());
+      return;
+    }
+    setIssuedHistory(services.registry.list());
+    dispatch({ type: "ISSUED_SESSION_DISPLAY_REQUESTED", issued });
+  }, [dispatch, services]);
+
+  const startExperience = useCallback(() => {
+    const currentState = stateRef.current;
+    if (!acceptingLiveRef.current || currentState.phase !== "welcome") return;
+    if (!startedMetricGenerations.current.has(currentState.generation)) {
+      startedMetricGenerations.current.add(currentState.generation);
+      void services.metrics?.record("team_start").catch(() => undefined);
+    }
+    dispatch({ type: "EXPERIENCE_STARTED" });
+  }, [dispatch, services]);
 
   const retry = useCallback(() => {
     const currentState = stateRef.current;
@@ -281,6 +324,10 @@ export function App({ services }: { services: AppServices }) {
     dispatch,
     onConfirmFrame: confirmFrame,
     onRetry: retry,
+    acceptingLive,
+    issuedHistory,
+    onRedisplayIssued: redisplayIssuedSession,
+    onStartExperience: startExperience,
   });
 
   return (
@@ -299,6 +346,10 @@ function renderPhase({
   dispatch,
   onConfirmFrame,
   onRetry,
+  acceptingLive,
+  issuedHistory,
+  onRedisplayIssued,
+  onStartExperience,
 }: {
   state: BoothState;
   services: AppServices;
@@ -307,6 +358,10 @@ function renderPhase({
   dispatch(event: BoothEvent): void;
   onConfirmFrame(): void;
   onRetry(): void;
+  acceptingLive: boolean;
+  issuedHistory: readonly import("../shared/contracts.js").IssuedSession[];
+  onRedisplayIssued(id: string): void;
+  onStartExperience(): void;
 }) {
   switch (state.phase) {
     case "preflight":
@@ -320,7 +375,12 @@ function renderPhase({
         </section>
       );
     case "welcome":
-      return <WelcomeScreen onStart={() => dispatch({ type: "EXPERIENCE_STARTED" })} />;
+      return <WelcomeScreen
+        acceptingCaptures={acceptingLive}
+        issuedSessions={issuedHistory}
+        onRedisplay={onRedisplayIssued}
+        onStart={onStartExperience}
+      />;
     case "capturing":
       return (
         <CaptureScreen
@@ -350,6 +410,7 @@ function renderPhase({
           selectedIds={state.selectedIds}
           frames={services.frames}
           selectedFrameId={state.selectedFrameId}
+          compositor={services.compositor}
           onFrameSelect={(id) => dispatch({ type: "FRAME_SELECTED", id })}
           onContinue={onConfirmFrame}
         />

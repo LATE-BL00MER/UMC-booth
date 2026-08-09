@@ -12,6 +12,31 @@ afterEach(() => {
 });
 
 describe("recipient page", () => {
+  it("scrubs the fragment key from browser history before fetching or decrypting", async () => {
+    const key = await generatePhotoKey();
+    const ciphertext = await encryptPhoto(new Uint8Array(await savedBlob.arrayBuffer()), key);
+    const replaceState = vi.fn();
+    const responseBytes = new Uint8Array(ciphertext.byteLength);
+    responseBytes.set(ciphertext);
+    const fetchMock = vi.fn<typeof fetch>().mockResolvedValueOnce(new Response(responseBytes.buffer));
+    const location = new URL("https://booth.test/d/token-value#key=secret-fragment");
+
+    await bootstrapRecipientPage(document, {
+      decryptPhoto,
+      fetch: fetchMock,
+      importKeyFragment: async () => key,
+      joinSiteUrl: "https://join.example.test/apply",
+      location,
+      history: { replaceState } as unknown as History,
+      savePhoto: vi.fn(),
+      createObjectURL: () => "blob:photo-preview",
+    });
+
+    expect(replaceState).toHaveBeenCalledWith(null, "", "/d/token-value");
+    expect(fetchMock).toHaveBeenCalled();
+    expect(screen.getByAltText("완성된 네컷 사진")).toBeVisible();
+  });
+
   it("fetches ciphertext without sending the key and reveals the CTA after save intent", async () => {
     const key = await generatePhotoKey();
     const ciphertext = await encryptPhoto(new Uint8Array(await savedBlob.arrayBuffer()), key);

@@ -41,6 +41,8 @@ export class TunnelStartError extends Error {
 }
 
 const HEALTH_TIMEOUT_MS = 5_000;
+const HEALTH_PROBE_INTERVAL_MS = 15_000;
+const MAX_CONSECUTIVE_HEALTH_FAILURES = 2;
 const RESTART_DELAYS_MS = [1_000, 2_000, 5_000] as const;
 
 const defaultTimers: TimerAdapter = {
@@ -58,6 +60,8 @@ export class TunnelSupervisor {
   private activeRun = 0;
   private child: TunnelChild | null = null;
   private healthAbortController: AbortController | null = null;
+  private healthTimer: unknown = null;
+  private consecutiveHealthFailures = 0;
   private restartTimer: unknown = null;
   private restartAttempt = 0;
   private stopped = true;
@@ -90,8 +94,7 @@ export class TunnelSupervisor {
     ++this.activeRun;
     this.loopbackUrl = null;
     this.cancelRestart();
-    this.healthAbortController?.abort();
-    this.healthAbortController = null;
+    this.cancelHealthWork();
     const child = this.child;
     this.child = null;
     child?.kill();
@@ -111,6 +114,8 @@ export class TunnelSupervisor {
 
   private launch(run: number): void {
     if (!this.isCurrent(run) || !this.loopbackUrl) return;
+    this.cancelHealthWork();
+    this.consecutiveHealthFailures = 0;
     this.statusValue = startingStatus();
 
     let child: TunnelChild;
@@ -148,7 +153,7 @@ export class TunnelSupervisor {
   }
 
   private beginHealthCheck(run: number, child: TunnelChild, line: string): void {
-    if (!this.isCurrentChild(run, child) || this.healthAbortController) return;
+    if (!this.isCurrentChild(run, child) || this.healthAbortController || this.statusValue.state !== "starting") return;
     const publicUrl = parseQuickTunnelUrl(line);
     if (!publicUrl) return;
     void this.probeHealth(run, child, publicUrl);
@@ -176,24 +181,34 @@ export class TunnelSupervisor {
 
       this.healthAbortController = null;
       this.restartAttempt = 0;
+      this.consecutiveHealthFailures = 0;
+      const activated = this.statusValue.state !== "healthy";
       this.statusValue = {
         state: "healthy",
         publicUrl,
         latencyMs: this.timers.now() - startedAt,
         error: null,
       };
-      for (const listener of this.urlListeners) {
-        try {
-          listener(publicUrl);
-        } catch {
-          // A consumer's reissue failure must not prevent later consumers or startup from completing.
+      if (activated) {
+        for (const listener of this.urlListeners) {
+          try {
+            listener(publicUrl);
+          } catch {
+            // A consumer's reissue failure must not prevent later consumers or startup from completing.
+          }
         }
+        this.resolveStart(run);
       }
-      this.resolveStart(run);
+      this.scheduleHealthProbe(run, child, publicUrl);
     } catch {
       if (this.isCurrentChild(run, child) && this.healthAbortController === controller) {
         this.healthAbortController = null;
-        this.fail(run, "health-failed");
+        this.consecutiveHealthFailures += 1;
+        if (this.statusValue.state === "healthy" && this.consecutiveHealthFailures < MAX_CONSECUTIVE_HEALTH_FAILURES) {
+          this.scheduleHealthProbe(run, child, publicUrl);
+        } else {
+          this.fail(run, "health-failed");
+        }
       }
     } finally {
       if (timeout !== undefined) this.timers.clearTimeout(timeout);
@@ -202,8 +217,7 @@ export class TunnelSupervisor {
 
   private fail(run: number, error: "process-exit" | "health-failed"): void {
     if (!this.isCurrent(run)) return;
-    this.healthAbortController?.abort();
-    this.healthAbortController = null;
+    this.cancelHealthWork();
     const child = this.child;
     this.child = null;
     child?.kill();
@@ -213,8 +227,7 @@ export class TunnelSupervisor {
 
   private markMissingBinary(run: number): void {
     if (!this.isCurrent(run)) return;
-    this.healthAbortController?.abort();
-    this.healthAbortController = null;
+    this.cancelHealthWork();
     this.child = null;
     this.statusValue = downStatus("missing-binary");
     this.rejectStart(run, new TunnelStartError());
@@ -234,6 +247,25 @@ export class TunnelSupervisor {
     if (this.restartTimer === null) return;
     this.timers.clearTimeout(this.restartTimer);
     this.restartTimer = null;
+  }
+
+  private scheduleHealthProbe(run: number, child: TunnelChild, publicUrl: string): void {
+    if (!this.isCurrentChild(run, child) || this.statusValue.state !== "healthy") return;
+    if (this.healthTimer !== null) this.timers.clearTimeout(this.healthTimer);
+    this.healthTimer = this.timers.setTimeout(() => {
+      this.healthTimer = null;
+      if (!this.isCurrentChild(run, child) || this.statusValue.state !== "healthy") return;
+      void this.probeHealth(run, child, publicUrl);
+    }, HEALTH_PROBE_INTERVAL_MS);
+  }
+
+  private cancelHealthWork(): void {
+    if (this.healthTimer !== null) {
+      this.timers.clearTimeout(this.healthTimer);
+      this.healthTimer = null;
+    }
+    this.healthAbortController?.abort();
+    this.healthAbortController = null;
   }
 
   private isCurrent(run: number): boolean {

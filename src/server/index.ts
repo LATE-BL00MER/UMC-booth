@@ -35,6 +35,7 @@ async function main(): Promise<void> {
       config,
       runtimeStatus,
       operatorBuildDir,
+      metrics,
     }),
     tunnel: new TunnelSupervisor(),
     metrics,
