@@ -1,6 +1,6 @@
 import type { FastifyReply } from "fastify";
 
-type SafeStatus = 400 | 404 | 405 | 409 | 410 | 413 | 415 | 500;
+type SafeStatus = 400 | 404 | 405 | 409 | 410 | 413 | 415 | 500 | 503;
 
 const messages: Record<SafeStatus, string> = {
   400: "Bad request",
@@ -11,6 +11,7 @@ const messages: Record<SafeStatus, string> = {
   413: "Payload too large",
   415: "Unsupported media type",
   500: "Internal server error",
+  503: "Service unavailable",
 };
 
 export function sendSafeError(reply: FastifyReply, statusCode: SafeStatus): FastifyReply {
@@ -31,5 +32,6 @@ function isSafeStatus(statusCode: unknown): statusCode is SafeStatus {
     || statusCode === 409
     || statusCode === 410
     || statusCode === 413
-    || statusCode === 415;
+    || statusCode === 415
+    || statusCode === 503;
 }

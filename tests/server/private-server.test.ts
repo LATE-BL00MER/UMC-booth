@@ -19,6 +19,7 @@ async function createPrivateApp() {
     pendingTtlMs: 120_000,
   });
   await store.initialize();
+  const availability = { acceptingCaptures: true };
   const runtimeStatus: RuntimeStatusProvider = {
     getStatus: vi.fn(async (): Promise<RuntimeStatus> => ({
       tunnel: "healthy",
@@ -28,7 +29,7 @@ async function createPrivateApp() {
       pendingSessions: 2,
       activeSessions: 3,
       encryptedBytes: 42,
-      acceptingCaptures: true,
+      acceptingCaptures: availability.acceptingCaptures,
     })),
     requestShutdown: vi.fn(async () => undefined),
   };
@@ -52,7 +53,7 @@ async function createPrivateApp() {
   };
   const app = buildPrivateServer({ store, config, runtimeStatus, operatorBuildDir: join(root, "operator") });
   await app.ready();
-  return { app, runtimeStatus, store };
+  return { app, availability, runtimeStatus, store };
 }
 
 describe("private server", () => {
@@ -75,6 +76,23 @@ describe("private server", () => {
 
     expect(response.statusCode).toBe(201);
     expect(response.json()).toEqual({ id: expect.any(String), createdAt: 1_000 });
+  });
+
+  it("rejects new ciphertext while runtime cleanup health is unavailable", async () => {
+    const context = await createPrivateApp();
+    apps.push(context.app);
+    context.availability.acceptingCaptures = false;
+
+    const response = await context.app.inject({
+      method: "POST",
+      url: "/api/sessions",
+      headers: { "content-type": "application/octet-stream" },
+      payload: Buffer.from([9, 8, 7]),
+    });
+
+    expect(response.statusCode).toBe(503);
+    expect(response.body).toBe('{"error":"Service unavailable"}');
+    expect(await context.store.stats()).toMatchObject({ pending: 0, active: 0 });
   });
 
   it("exposes runtime status without session details", async () => {

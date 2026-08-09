@@ -1,4 +1,5 @@
 import { readFile } from "node:fs/promises";
+import { resolve } from "node:path";
 import Fastify, { type FastifyInstance } from "fastify";
 import fastifyStatic from "@fastify/static";
 import type { AppConfig } from "../shared/config";
@@ -27,7 +28,7 @@ export function buildPrivateServer(deps: PrivateServerDependencies): FastifyInst
   });
 
   void app.register(fastifyStatic, {
-    root: deps.operatorBuildDir,
+    root: resolve(deps.operatorBuildDir),
     prefix: "/",
     index: ["index.html"],
     list: false,
@@ -35,7 +36,7 @@ export function buildPrivateServer(deps: PrivateServerDependencies): FastifyInst
     redirect: false,
   });
   void app.register(fastifyStatic, {
-    root: deps.config.framePackDir,
+    root: resolve(deps.config.framePackDir),
     prefix: "/frame-pack/",
     list: false,
     dotfiles: "deny",
@@ -45,7 +46,7 @@ export function buildPrivateServer(deps: PrivateServerDependencies): FastifyInst
 
   app.get("/poses.json", async (_request, reply) => {
     try {
-      const poses = await readFile(deps.config.poseConfigPath, "utf8");
+      const poses = await readFile(resolve(deps.config.poseConfigPath), "utf8");
       return reply.type("application/json; charset=utf-8").send(poses);
     } catch {
       return sendSafeError(reply, 404);
@@ -55,6 +56,9 @@ export function buildPrivateServer(deps: PrivateServerDependencies): FastifyInst
   app.get("/api/status", async () => deps.runtimeStatus.getStatus());
 
   app.post("/api/sessions", async (request, reply) => {
+    if (!(await deps.runtimeStatus.getStatus()).acceptingCaptures) {
+      return sendSafeError(reply, 503);
+    }
     if (request.headers["content-type"]?.split(";", 1)[0]?.toLowerCase() !== ciphertextContentType) {
       return sendSafeError(reply, 415);
     }

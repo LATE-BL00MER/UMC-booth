@@ -1,13 +1,13 @@
 import { mkdtemp, mkdir, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, relative } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import type { AppConfig } from "../../src/shared/config";
 import { buildPrivateServer } from "../../src/server/private-server";
 import { FileSessionStore } from "../../src/server/session-store";
 import type { RuntimeStatusProvider } from "../../src/server/types";
 
-async function createAppWithAssets() {
+async function createAppWithAssets(relativeAssetPaths = false) {
   const root = await mkdtemp(join(tmpdir(), "umc-static-"));
   const operatorBuildDir = join(root, "operator");
   const framePackDir = join(root, "frames");
@@ -22,7 +22,10 @@ async function createAppWithAssets() {
   await store.initialize();
   const config: AppConfig = {
     nodeEnv: "test", joinSiteUrl: "https://join.example.test", privatePort: 4173, publicPort: 4174,
-    sessionDir: join(root, "sessions"), framePackDir, poseConfigPath, tunnelMode: "local", localPublicBaseUrl: "http://127.0.0.1:4174",
+    sessionDir: join(root, "sessions"),
+    framePackDir: relativeAssetPaths ? relative(process.cwd(), framePackDir) : framePackDir,
+    poseConfigPath: relativeAssetPaths ? relative(process.cwd(), poseConfigPath) : poseConfigPath,
+    tunnelMode: "local", localPublicBaseUrl: "http://127.0.0.1:4174",
     countdownSeconds: 5, captureCount: 6, selectedCount: 4, activeTtlMs: 600_000, pendingTtlMs: 120_000, sweepIntervalMs: 30_000, countdownTickMs: 1_000,
   };
   const runtimeStatus: RuntimeStatusProvider = { getStatus: async () => ({ tunnel: "starting", publicUrl: null, publicLatencyMs: null, lastSweepAt: null, pendingSessions: 0, activeSessions: 0, encryptedBytes: 0, acceptingCaptures: false }), requestShutdown: async () => undefined };
@@ -40,6 +43,14 @@ describe("private static assets", () => {
     apps.push(app);
     expect((await app.inject({ method: "GET", url: "/" })).body).toContain("Operator");
     expect((await app.inject({ method: "GET", url: "/assets/app.js" })).body).toContain("operator");
+    expect((await app.inject({ method: "GET", url: "/frame-pack/frame.svg" })).body).toContain("svg");
+    expect((await app.inject({ method: "GET", url: "/poses.json" })).json()).toHaveLength(6);
+  });
+
+  it("accepts relative asset paths produced by the default runtime configuration", async () => {
+    const app = await createAppWithAssets(true);
+    apps.push(app);
+
     expect((await app.inject({ method: "GET", url: "/frame-pack/frame.svg" })).body).toContain("svg");
     expect((await app.inject({ method: "GET", url: "/poses.json" })).json()).toHaveLength(6);
   });

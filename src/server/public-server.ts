@@ -41,7 +41,7 @@ export function buildPublicServer(deps: PublicServerDependencies): FastifyInstan
     if (!sendLookupStatus(lookup, reply)) {
       return;
     }
-    metrics.recordPage();
+    await metrics.recordPage();
     return reply.type("text/html; charset=utf-8").send(recipientHtml);
   });
 
@@ -51,7 +51,7 @@ export function buildPublicServer(deps: PublicServerDependencies): FastifyInstan
     if (!sendLookupStatus(lookup, reply)) {
       return;
     }
-    metrics.recordDownload();
+    await metrics.recordDownload();
     return reply.type("application/octet-stream").send(Buffer.from(lookup.bytes));
   });
 
@@ -60,7 +60,7 @@ export function buildPublicServer(deps: PublicServerDependencies): FastifyInstan
     if (!event) {
       return sendSafeError(reply, 400);
     }
-    metrics.record(event);
+    await metrics.record(event);
     return reply.code(204).send();
   });
 
