@@ -1,5 +1,6 @@
 import Fastify, { type FastifyInstance, type FastifyReply } from "fastify";
 import { AggregateMetrics, type AggregateEvent } from "./metrics";
+import { safeStatusFor, sendSafeError } from "./safe-error";
 import type { FileSessionStore, SessionLookup } from "./session-store";
 
 const privacyHeaders = {
@@ -24,6 +25,8 @@ export function buildPublicServer(deps: PublicServerDependencies): FastifyInstan
   app.addHook("onRequest", async (_request, reply) => {
     reply.header("cache-control", "no-store");
   });
+  app.setNotFoundHandler((_request, reply) => sendSafeError(reply, 404));
+  app.setErrorHandler((error, _request, reply) => sendSafeError(reply, safeStatusFor(error)));
 
   app.get("/health", async () => ({ ok: true }));
 
@@ -50,7 +53,7 @@ export function buildPublicServer(deps: PublicServerDependencies): FastifyInstan
   app.post("/events", async (request, reply) => {
     const event = getEvent(request.body);
     if (!event) {
-      return reply.code(400).send();
+      return sendSafeError(reply, 400);
     }
     metrics.record(event);
     return reply.code(204).send();
@@ -63,7 +66,7 @@ function sendLookupStatus(lookup: SessionLookup, reply: FastifyReply): lookup is
   if (lookup.kind === "active") {
     return true;
   }
-  reply.code(lookup.kind === "gone" ? 410 : 404).send();
+  sendSafeError(reply, lookup.kind === "gone" ? 410 : 404);
   return false;
 }
 

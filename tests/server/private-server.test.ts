@@ -144,7 +144,9 @@ describe("private server", () => {
 
     expect((await context.app.inject({ method: "DELETE", url: `/api/sessions/${pending.id}` })).statusCode).toBe(204);
     expect((await context.app.inject({ method: "DELETE", url: `/api/sessions/${pending.id}` })).statusCode).toBe(204);
-    expect((await context.app.inject({ method: "DELETE", url: `/api/sessions/${active.id}` })).statusCode).toBe(409);
+    const activeDeletion = await context.app.inject({ method: "DELETE", url: `/api/sessions/${active.id}` });
+    expect(activeDeletion.statusCode).toBe(409);
+    expect(activeDeletion.body).toBe('{"error":"Conflict"}');
   });
 
   it("requires the exact shutdown confirmation and schedules shutdown after accepting it", async () => {
@@ -156,5 +158,48 @@ describe("private server", () => {
     await new Promise((resolve) => setImmediate(resolve));
 
     expect(context.runtimeStatus.requestShutdown).toHaveBeenCalledOnce();
+  });
+
+  it("does not reflect identifiers from unmatched private paths", async () => {
+    const context = await createPrivateApp();
+    apps.push(context.app);
+
+    const response = await context.app.inject({
+      method: "GET",
+      url: "/api/unknown-private-identifier",
+      headers: { cookie: "operator=private-cookie", "x-forwarded-for": "198.51.100.7" },
+    });
+
+    expect(response.statusCode).toBe(404);
+    expect(response.body).toBe('{"error":"Not found"}');
+    expect(response.body).not.toContain("unknown-private-identifier");
+    expect(response.body).not.toContain("private-cookie");
+    expect(response.body).not.toContain("198.51.100.7");
+  });
+
+  it("returns a sanitized 404 or 405 for forbidden private methods", async () => {
+    const context = await createPrivateApp();
+    apps.push(context.app);
+
+    const response = await context.app.inject({ method: "GET", url: "/api/sessions" });
+
+    expect([404, 405]).toContain(response.statusCode);
+    expect(response.body).toMatch(/^\{"error":"(?:Not found|Method not allowed)"\}$/);
+  });
+
+  it("returns a fixed unsupported-media error without request data", async () => {
+    const context = await createPrivateApp();
+    apps.push(context.app);
+
+    const response = await context.app.inject({
+      method: "POST",
+      url: "/api/sessions",
+      headers: { "content-type": "application/json" },
+      payload: { ciphertext: "private-identifier" },
+    });
+
+    expect(response.statusCode).toBe(415);
+    expect(response.body).toBe('{"error":"Unsupported media type"}');
+    expect(response.body).not.toContain("private-identifier");
   });
 });

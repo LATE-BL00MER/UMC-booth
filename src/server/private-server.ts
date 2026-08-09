@@ -2,6 +2,7 @@ import { readFile } from "node:fs/promises";
 import Fastify, { type FastifyInstance } from "fastify";
 import fastifyStatic from "@fastify/static";
 import type { AppConfig } from "../shared/config";
+import { safeStatusFor, sendSafeError } from "./safe-error";
 import type { FileSessionStore } from "./session-store";
 import type { RuntimeStatusProvider } from "./types";
 
@@ -18,12 +19,8 @@ export interface PrivateServerDependencies {
 export function buildPrivateServer(deps: PrivateServerDependencies): FastifyInstance {
   const app = Fastify({ logger: false, bodyLimit });
 
-  app.setErrorHandler((error, _request, reply) => {
-    if (hasStatusCode(error, 403)) {
-      return reply.code(404).send();
-    }
-    return reply.send(error);
-  });
+  app.setNotFoundHandler((_request, reply) => sendSafeError(reply, 404));
+  app.setErrorHandler((error, _request, reply) => sendSafeError(reply, hasStatusCode(error, 403) ? 404 : safeStatusFor(error)));
 
   app.addContentTypeParser(ciphertextContentType, { parseAs: "buffer" }, (_request, payload, done) => {
     done(null, payload);
@@ -51,7 +48,7 @@ export function buildPrivateServer(deps: PrivateServerDependencies): FastifyInst
       const poses = await readFile(deps.config.poseConfigPath, "utf8");
       return reply.type("application/json; charset=utf-8").send(poses);
     } catch {
-      return reply.code(404).send();
+      return sendSafeError(reply, 404);
     }
   });
 
@@ -59,10 +56,10 @@ export function buildPrivateServer(deps: PrivateServerDependencies): FastifyInst
 
   app.post("/api/sessions", async (request, reply) => {
     if (request.headers["content-type"]?.split(";", 1)[0]?.toLowerCase() !== ciphertextContentType) {
-      return reply.code(415).send();
+      return sendSafeError(reply, 415);
     }
     if (!Buffer.isBuffer(request.body)) {
-      return reply.code(415).send();
+      return sendSafeError(reply, 415);
     }
     const session = await deps.store.createPending(request.body);
     return reply.code(201).send(session);
@@ -74,9 +71,9 @@ export function buildPrivateServer(deps: PrivateServerDependencies): FastifyInst
       return reply.send(session);
     } catch (error) {
       if (error instanceof TypeError || error instanceof Error && error.message === "Session not found") {
-        return reply.code(404).send();
+        return sendSafeError(reply, 404);
       }
-      return reply.code(409).send();
+      return sendSafeError(reply, 409);
     }
   });
 
@@ -84,10 +81,13 @@ export function buildPrivateServer(deps: PrivateServerDependencies): FastifyInst
     try {
       const record = await deps.store.inspectById(request.params.id);
       if (record.status !== "pending") {
-        return reply.code(409).send();
+        return sendSafeError(reply, 409);
       }
-    } catch {
-      return reply.code(204).send();
+    } catch (error) {
+      if (error instanceof TypeError || error instanceof Error && error.message === "Session not found") {
+        return reply.code(204).send();
+      }
+      throw error;
     }
     await deps.store.deletePending(request.params.id);
     return reply.code(204).send();
@@ -95,7 +95,7 @@ export function buildPrivateServer(deps: PrivateServerDependencies): FastifyInst
 
   app.post("/api/shutdown", async (request, reply) => {
     if (!isShutdownRequest(request.body)) {
-      return reply.code(400).send();
+      return sendSafeError(reply, 400);
     }
     setImmediate(() => {
       void deps.runtimeStatus.requestShutdown();

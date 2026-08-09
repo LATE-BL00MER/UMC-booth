@@ -116,4 +116,45 @@ describe("public server", () => {
     expect(response.body).not.toContain("secret=value");
     expect(response.body).not.toContain("private.example");
   });
+
+  it("does not reflect tokens or request identifiers from unmatched public paths", async () => {
+    const context = await createPublicApp();
+    apps.push(context.app);
+    const active = await context.store.activate((await context.store.createPending(new Uint8Array([9]))).id);
+
+    const response = await context.app.inject({
+      method: "GET",
+      url: `/f/${active.publicToken}/extra`,
+      headers: { cookie: "visitor=private-identifier", "x-forwarded-for": "198.51.100.7" },
+    });
+
+    expect(response.statusCode).toBe(404);
+    expect(response.body).toBe('{"error":"Not found"}');
+    expect(response.body).not.toContain(active.publicToken);
+    expect(response.body).not.toContain("private-identifier");
+    expect(response.body).not.toContain("198.51.100.7");
+  });
+
+  it("returns a sanitized 404 or 405 for forbidden public methods", async () => {
+    const context = await createPublicApp();
+    apps.push(context.app);
+    const active = await context.store.activate((await context.store.createPending(new Uint8Array([9]))).id);
+
+    const response = await context.app.inject({ method: "POST", url: `/d/${active.publicToken}` });
+
+    expect([404, 405]).toContain(response.statusCode);
+    expect(response.body).toMatch(/^\{"error":"(?:Not found|Method not allowed)"\}$/);
+    expect(response.body).not.toContain(active.publicToken);
+  });
+
+  it("returns fixed error bodies for malformed public requests", async () => {
+    const context = await createPublicApp();
+    apps.push(context.app);
+
+    const response = await context.app.inject({ method: "POST", url: "/events", payload: { event: "user-identifier" } });
+
+    expect(response.statusCode).toBe(400);
+    expect(response.body).toBe('{"error":"Bad request"}');
+    expect(response.body).not.toContain("user-identifier");
+  });
 });
