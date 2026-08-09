@@ -39,3 +39,24 @@ Commit hash: `4a10716c44c9ef2c5fddcf1d88429a55a526088b` (superseded by the immed
 ## Concerns
 
 None. The registry intentionally has no persistence, per the key-isolation requirement; reissuing after a page reload is therefore not supported.
+
+## Round 1 cleanup fix
+
+Review found that the coordinator swallowed a failed `deletePending` call, allowing a retry (or terminal rejection) while an earlier pending ciphertext could remain.
+
+### RED → GREEN evidence
+
+1. Added an activation-failure retry test that proves the operation ordering is `create`, `activate`, `delete`, then the next `create`.
+2. Added a cleanup-failure test that creates a pending session, fails activation and deletion, and requires rejection with no second create attempt.
+3. RED command: `npm test -- tests/operator/delivery tests/operator/components/QrScreen.test.tsx` failed because the promise resolved to a new issued session after the failed cleanup.
+4. GREEN change: deletion is now required. A deletion error exits the coordinator before retry/return, retaining the primary failure's name/message and attaching the cleanup error as its cause. The pending ID is cleared after successful activation so active sessions are never deleted by later local failures.
+5. GREEN command: focused suite passed (3 files, 12 tests).
+
+### Verification
+
+- Focused delivery/QR tests — passed (3 files, 12 tests).
+- Typecheck, full suite, and diff check — passed before narrow-fix commit.
+
+### Commit
+
+Round 1 cleanup-fix commit: to be filled after commit.

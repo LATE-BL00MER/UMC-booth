@@ -14,6 +14,8 @@ class FakePrivateApi implements PrivateApiClient {
   calls: Array<{ operation: string; id?: string; ciphertext?: number[] }> = [];
   createAttempts = 0;
   failCreateCount = 0;
+  failActivateCount = 0;
+  failDeleteCount = 0;
   createdId = "pending-1";
   deletedPendingIds: string[] = [];
   pauseOnActivate = false;
@@ -31,6 +33,10 @@ class FakePrivateApi implements PrivateApiClient {
 
   async activate(id: string, signal: AbortSignal): Promise<{ publicToken: string; expiresAt: number }> {
     this.calls.push({ operation: "activate", id });
+    if (this.failActivateCount > 0) {
+      this.failActivateCount -= 1;
+      throw new Error("temporary activation failure");
+    }
     if (!this.pauseOnActivate) {
       if (signal.aborted) throw abortError();
       return { publicToken: "public-token", expiresAt: 1_800_000_000_000 };
@@ -43,6 +49,10 @@ class FakePrivateApi implements PrivateApiClient {
   async deletePending(id: string): Promise<void> {
     this.calls.push({ operation: "delete", id });
     this.deletedPendingIds.push(id);
+    if (this.failDeleteCount > 0) {
+      this.failDeleteCount -= 1;
+      throw new Error("pending cleanup failed");
+    }
   }
 }
 
@@ -97,6 +107,47 @@ describe("EncryptedDeliveryCoordinator", () => {
 
     await expect(promise).rejects.toMatchObject({ name: "AbortError" });
     expect(api.deletedPendingIds).toEqual([api.createdId]);
+  });
+
+  it("cleans up a failed activation before starting a retry", async () => {
+    const api = new FakePrivateApi();
+    api.failActivateCount = 1;
+    const sleeper = new FakeSleeper();
+    const coordinator = new EncryptedDeliveryCoordinator(
+      api,
+      new MemoryIssuedSessionRegistry(),
+      sleeper.sleep,
+    );
+
+    await coordinator.issue(validIssueInput());
+
+    expect(api.calls.map(({ operation }) => operation)).toEqual([
+      "create",
+      "activate",
+      "delete",
+      "create",
+      "activate",
+    ]);
+    expect(sleeper.delays).toEqual([1_000]);
+  });
+
+  it("stops when pending cleanup fails instead of creating another ciphertext", async () => {
+    const api = new FakePrivateApi();
+    api.failActivateCount = 1;
+    api.failDeleteCount = 1;
+    const sleeper = new FakeSleeper();
+    const coordinator = new EncryptedDeliveryCoordinator(
+      api,
+      new MemoryIssuedSessionRegistry(),
+      sleeper.sleep,
+    );
+
+    await expect(coordinator.issue(validIssueInput())).rejects.toMatchObject({
+      message: "temporary activation failure",
+      cause: expect.objectContaining({ message: "pending cleanup failed" }),
+    });
+    expect(api.createAttempts).toBe(1);
+    expect(sleeper.delays).toEqual([]);
   });
 
   it("keeps an activated session registered after a later reset abort", async () => {

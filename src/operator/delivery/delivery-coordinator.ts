@@ -54,9 +54,11 @@ export class EncryptedDeliveryCoordinator implements DeliveryCoordinator {
         pendingId = pending.id;
         throwIfAborted(input.signal);
 
-        const activated = await this.api.activate(pendingId, input.signal);
+        const id = pendingId;
+        const activated = await this.api.activate(id, input.signal);
+        pendingId = null;
         const issued: IssuedSession = {
-          id: pendingId,
+          id,
           publicToken: activated.publicToken,
           deliveryUrl: buildDeliveryUrl(input.publicBaseUrl, activated.publicToken, keyFragment),
           expiresAt: activated.expiresAt,
@@ -64,21 +66,19 @@ export class EncryptedDeliveryCoordinator implements DeliveryCoordinator {
         this.registry.add(issued, keyFragment);
         return issued;
       } catch (error) {
-        if (pendingId !== null) await this.deletePendingQuietly(pendingId);
+        if (pendingId !== null) {
+          try {
+            await this.api.deletePending(pendingId);
+          } catch (cleanupError) {
+            throw errorWithCleanupCause(error, cleanupError);
+          }
+        }
         if (input.signal.aborted || isAbortError(error)) throw abortError();
         lastError = error;
       }
     }
 
     throw lastError ?? new Error("Could not issue delivery session");
-  }
-
-  private async deletePendingQuietly(id: string): Promise<void> {
-    try {
-      await this.api.deletePending(id);
-    } catch {
-      // Cleanup is best effort; the original issue failure remains the useful error.
-    }
   }
 }
 
@@ -103,6 +103,15 @@ function throwIfAborted(signal: AbortSignal): void {
 
 function isAbortError(error: unknown): boolean {
   return error instanceof DOMException && error.name === "AbortError";
+}
+
+function errorWithCleanupCause(primaryError: unknown, cleanupError: unknown): Error {
+  if (primaryError instanceof Error) {
+    const error = new Error(primaryError.message, { cause: cleanupError });
+    error.name = primaryError.name;
+    return error;
+  }
+  return new Error("Delivery failed and pending cleanup failed", { cause: cleanupError });
 }
 
 function abortError(): DOMException {
