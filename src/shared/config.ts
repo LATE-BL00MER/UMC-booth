@@ -21,7 +21,10 @@ export interface AppConfig {
 
 const schema = z.object({
   NODE_ENV: z.enum(["development", "test", "production"]).default("production"),
-  JOIN_SITE_URL: z.string().url(),
+  JOIN_SITE_URL: z
+    .string()
+    .url()
+    .default("https://university.neordinary.com/about"),
   PRIVATE_PORT: z.coerce.number().int().min(1024).max(65_535).default(4173),
   PUBLIC_PORT: z.coerce.number().int().min(1024).max(65_535).default(4174),
   SESSION_DIR: z.string().min(1).default("runtime-data/sessions"),

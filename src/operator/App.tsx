@@ -14,7 +14,7 @@ import {
   type PreflightStatus,
 } from "./components/PreflightBar.js";
 import { QrScreen } from "./components/QrScreen.js";
-import { ResetControl } from "./components/ResetControl.js";
+import { OperatorShell } from "./components/OperatorShell.js";
 import { SelectionScreen } from "./components/SelectionScreen.js";
 import { FrameScreen } from "./components/FrameScreen.js";
 import { WelcomeScreen } from "./components/WelcomeScreen.js";
@@ -335,10 +335,13 @@ export function App({ services }: { services: AppServices }) {
   });
 
   return (
-    <>
-      <main>{phaseScreen}</main>
-      <ResetControl onConfirm={() => void resetCurrentSession()} />
-    </>
+    <OperatorShell
+      phase={state.phase}
+      status={preflightStatus}
+      onReset={() => void resetCurrentSession()}
+    >
+      {phaseScreen}
+    </OperatorShell>
   );
 }
 
@@ -370,9 +373,12 @@ function renderPhase({
   switch (state.phase) {
     case "preflight":
       return (
-        <section aria-label="운영 준비 확인">
+        <section className="preflight-screen" aria-label="운영 준비 확인">
+          <h1>운영 준비 상태를 확인하고 있어요</h1>
           {preflightStatus === null ? (
-            <p aria-live="polite">운영 준비 상태를 확인하는 중입니다</p>
+            <div className="loading-dots" aria-label="운영 준비 상태를 확인하는 중입니다" aria-live="polite">
+              <span /><span /><span />
+            </div>
           ) : (
             <PreflightBar status={preflightStatus} />
           )}
@@ -420,7 +426,14 @@ function renderPhase({
         />
       );
     case "delivering":
-      return <section aria-label="사진 발급"><p aria-live="polite">사진을 만드는 중입니다</p></section>;
+      return (
+        <section className="phase-message" aria-label="사진 발급">
+          <p className="eyebrow">FINALIZING</p>
+          <h1>사진을 만들고 있어요</h1>
+          <p aria-live="polite">사진을 만드는 중입니다</p>
+          <div className="loading-dots" aria-hidden="true"><span /><span /><span /></div>
+        </section>
+      );
     case "qr":
       return state.issuedSession === null
         ? <ErrorScreen onRetry={onRetry} />
@@ -434,9 +447,13 @@ function renderPhase({
 
 function ErrorScreen({ onRetry }: { onRetry(): void }) {
   return (
-    <section aria-label="오류">
-      <p role="alert">사진을 준비하지 못했습니다</p>
-      <button type="button" onClick={onRetry}>다시 시도</button>
+    <section className="error-screen" aria-label="오류">
+      <div className="error-screen__panel glass-panel">
+        <p className="eyebrow">PLEASE TRY AGAIN</p>
+        <h1 role="alert">사진을 준비하지 못했습니다</h1>
+        <p>현재 단계부터 다시 시도할 수 있어요.</p>
+        <button className="button button--primary" type="button" onClick={onRetry}>다시 시도</button>
+      </div>
     </section>
   );
 }

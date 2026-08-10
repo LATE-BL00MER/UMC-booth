@@ -48,25 +48,31 @@ export function ResetControl({ onConfirm }: ResetControlProps) {
   };
 
   return (
-    <div style={{ position: "fixed", top: 16, right: 16 }}>
-      <button ref={resetButtonRef} type="button" onClick={() => setIsDialogOpen(true)}>
+    <div className="reset-control">
+      <button className="button button--ghost button--small" ref={resetButtonRef} type="button" onClick={() => setIsDialogOpen(true)}>
         처음으로
       </button>
       {isDialogOpen ? (
-        <div
-          ref={dialogRef}
-          role="dialog"
-          aria-modal="true"
-          aria-labelledby="reset-dialog-title"
-          tabIndex={-1}
-        >
-          <p id="reset-dialog-title">처음 화면으로 돌아갈까요?</p>
-          <button type="button" onClick={cancel}>
-            취소
-          </button>
-          <button type="button" onClick={confirm}>
-            확인
-          </button>
+        <div className="dialog-backdrop">
+          <div
+            className="dialog-panel"
+            ref={dialogRef}
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="reset-dialog-title"
+            tabIndex={-1}
+          >
+            <h2 id="reset-dialog-title">처음 화면으로 돌아갈까요?</h2>
+            <p>진행 중인 촬영과 선택 내용이 초기화됩니다.</p>
+            <div className="dialog-actions">
+              <button className="button button--secondary" type="button" onClick={cancel}>
+                취소
+              </button>
+              <button className="button button--danger" type="button" onClick={confirm}>
+                확인
+              </button>
+            </div>
+          </div>
         </div>
       ) : null}
     </div>

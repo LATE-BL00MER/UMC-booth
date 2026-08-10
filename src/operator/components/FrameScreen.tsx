@@ -81,33 +81,45 @@ export function FrameScreen({
   useEffect(() => () => releasePreview(previewUrlRef, revokePreviewUrl), [revokePreviewUrl]);
 
   return (
-    <section aria-label="프레임 선택">
-      <div aria-label="선택한 사진">
-        {selectedPhotos.map((photo, index) => (
-          <img key={photo.id} src={photo.previewUrl} alt={`선택한 사진 ${index + 1}`} />
-        ))}
+    <section className="frame-screen" aria-label="프레임 선택">
+      <div className="frame-preview-panel">
+        {previewUrl ? (
+          <img className="composed-preview" src={previewUrl} alt="선택한 프레임 합성 미리보기" />
+        ) : null}
+        <div className="selected-photo-strip" aria-label="선택한 사진">
+          {selectedPhotos.map((photo, index) => (
+            <img key={photo.id} src={photo.previewUrl} alt={`선택한 사진 ${index + 1}`} />
+          ))}
+        </div>
       </div>
-      {previewUrl ? <img src={previewUrl} alt="선택한 프레임 합성 미리보기" /> : null}
-      {previewFailed ? <p role="alert">미리보기를 만들지 못했습니다</p> : null}
-      <div role="radiogroup" aria-label="프레임 목록">
-        {frames.map((frame) => (
-          <label key={frame.id}>
-            <input
-              type="radio"
-              name="frame"
-              value={frame.id}
-              aria-label={frame.label}
-              checked={selectedFrameId === frame.id}
-              onChange={() => onFrameSelect(frame.id)}
-            />
-            {frame.label}
-            <img src={frame.thumbnail} alt={`${frame.label} 미리보기`} />
-          </label>
-        ))}
+      <div className="frame-sidebar">
+        <div>
+          <p className="eyebrow">CHOOSE A FRAME</p>
+          <h1>마지막으로 프레임을 골라주세요</h1>
+        </div>
+        {previewFailed ? <p className="inline-alert" role="alert">미리보기를 만들지 못했습니다</p> : null}
+        <div className="frame-options" role="radiogroup" aria-label="프레임 목록">
+          {frames.map((frame) => (
+            <label className="frame-option" data-selected={selectedFrameId === frame.id} key={frame.id}>
+              <input
+                type="radio"
+                name="frame"
+                value={frame.id}
+                aria-label={frame.label}
+                checked={selectedFrameId === frame.id}
+                onChange={() => onFrameSelect(frame.id)}
+              />
+              <img src={frame.thumbnail} alt={`${frame.label} 미리보기`} />
+              <span>{frame.label}</span>
+            </label>
+          ))}
+        </div>
+        <div className="screen-actions">
+          <button className="button button--primary" type="button" onClick={continueWithSelectedFrame} disabled={!hasSelectedFrame}>
+            이 프레임으로 사진 만들기
+          </button>
+        </div>
       </div>
-      <button type="button" onClick={continueWithSelectedFrame} disabled={!hasSelectedFrame}>
-        이 프레임으로 사진 만들기
-      </button>
     </section>
   );
 }

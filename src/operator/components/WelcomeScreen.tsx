@@ -13,29 +13,36 @@ export function WelcomeScreen({ onStart, acceptingCaptures, issuedSessions = [],
   const [selectedIssuedId, setSelectedIssuedId] = useState(issuedSessions[0]?.id ?? "");
 
   return (
-    <section aria-label="시작 안내">
-      <p>사진은 암호화되어 QR 발급 10분 후 삭제됩니다</p>
-      <label>
-        <input
-          type="checkbox"
-          checked={hasConsent}
-          onChange={(event) => setHasConsent(event.target.checked)}
-        />
-        모든 팀원이 촬영에 동의했습니다
-      </label>
-      <button type="button" disabled={!hasConsent || !acceptingCaptures} onClick={onStart}>
-        체험 시작
-      </button>
-      {issuedSessions.length > 0 && onRedisplay ? (
-        <div aria-label="이전 QR 재표시">
-          <select aria-label="이전 QR 선택" value={selectedIssuedId} onChange={(event) => setSelectedIssuedId(event.target.value)}>
-            {issuedSessions.map((issued, index) => <option key={issued.id} value={issued.id}>발급 QR {index + 1}</option>)}
-          </select>
-          <button type="button" disabled={!acceptingCaptures || !selectedIssuedId} onClick={() => onRedisplay(selectedIssuedId)}>
-            이전 QR 다시 표시
-          </button>
-        </div>
-      ) : null}
+    <section className="welcome-screen" aria-label="시작 안내">
+      <div className="welcome-hero">
+        <p className="eyebrow">UNIVERSITY MAKEUS CHALLENGE</p>
+        <h1>우리의 순간을 네컷으로</h1>
+        <p className="welcome-lead">6장을 찍고 마음에 드는 4장을 골라요</p>
+      </div>
+      <div className="welcome-consent glass-panel">
+        <p className="privacy-note">사진은 암호화되어 QR 발급 10분 후 삭제됩니다</p>
+        <label className="consent-control">
+          <input
+            type="checkbox"
+            checked={hasConsent}
+            onChange={(event) => setHasConsent(event.target.checked)}
+          />
+          <span>모든 팀원이 촬영에 동의했습니다</span>
+        </label>
+        <button className="button button--primary" type="button" disabled={!hasConsent || !acceptingCaptures} onClick={onStart}>
+          체험 시작
+        </button>
+        {issuedSessions.length > 0 && onRedisplay ? (
+          <div className="welcome-previous" aria-label="이전 QR 재표시">
+            <select className="select-control" aria-label="이전 QR 선택" value={selectedIssuedId} onChange={(event) => setSelectedIssuedId(event.target.value)}>
+              {issuedSessions.map((issued, index) => <option key={issued.id} value={issued.id}>발급 QR {index + 1}</option>)}
+            </select>
+            <button className="button button--secondary button--small" type="button" disabled={!acceptingCaptures || !selectedIssuedId} onClick={() => onRedisplay(selectedIssuedId)}>
+              이전 QR 다시 표시
+            </button>
+          </div>
+        ) : null}
+      </div>
     </section>
   );
 }

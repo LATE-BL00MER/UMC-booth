@@ -1,5 +1,7 @@
 import { createRoot } from "react-dom/client";
 
+import "./styles/index.css";
+
 import { App, type AppServices, type RuntimePreflightStatus } from "./App.js";
 import { BrowserCameraPort } from "./camera/camera-port.js";
 import { BootstrapShell } from "./components/BootstrapShell.js";

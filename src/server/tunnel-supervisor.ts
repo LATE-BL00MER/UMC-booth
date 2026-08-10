@@ -41,6 +41,7 @@ export class TunnelStartError extends Error {
 }
 
 const HEALTH_TIMEOUT_MS = 5_000;
+const INITIAL_HEALTH_DELAY_MS = 10_000;
 const INITIAL_HEALTH_RETRY_MS = 1_000;
 const HEALTH_PROBE_INTERVAL_MS = 15_000;
 const MAX_CONSECUTIVE_HEALTH_FAILURES = 2;
@@ -157,7 +158,7 @@ export class TunnelSupervisor {
     if (!this.isCurrentChild(run, child) || this.healthAbortController || this.statusValue.state !== "starting") return;
     const publicUrl = parseQuickTunnelUrl(line);
     if (!publicUrl) return;
-    void this.probeHealth(run, child, publicUrl);
+    this.scheduleInitialHealthProbe(run, child, publicUrl, INITIAL_HEALTH_DELAY_MS);
   }
 
   private async probeHealth(run: number, child: TunnelChild, publicUrl: string): Promise<void> {
@@ -265,14 +266,19 @@ export class TunnelSupervisor {
     }, HEALTH_PROBE_INTERVAL_MS);
   }
 
-  private scheduleInitialHealthProbe(run: number, child: TunnelChild, publicUrl: string): void {
+  private scheduleInitialHealthProbe(
+    run: number,
+    child: TunnelChild,
+    publicUrl: string,
+    delayMs = INITIAL_HEALTH_RETRY_MS,
+  ): void {
     if (!this.isCurrentChild(run, child) || this.statusValue.state !== "starting") return;
     if (this.healthTimer !== null) this.timers.clearTimeout(this.healthTimer);
     this.healthTimer = this.timers.setTimeout(() => {
       this.healthTimer = null;
       if (!this.isCurrentChild(run, child) || this.statusValue.state !== "starting") return;
       void this.probeHealth(run, child, publicUrl);
-    }, INITIAL_HEALTH_RETRY_MS);
+    }, delayMs);
   }
 
   private cancelHealthWork(): void {

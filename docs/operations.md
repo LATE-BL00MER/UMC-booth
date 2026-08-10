@@ -10,11 +10,9 @@ npm ci
 brew install cloudflared
 ```
 
-Do not commit the real application URL. At startup, enter the event HTTPS join URL directly in the terminal:
+The booth uses the committed UMC application page at `https://university.neordinary.com/about` as its join destination:
 
 ```bash
-read "JOIN_SITE_URL?가입 사이트 HTTPS URL: "
-export JOIN_SITE_URL
 npm run booth
 ```
 

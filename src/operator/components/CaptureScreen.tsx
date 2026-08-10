@@ -92,18 +92,19 @@ export function CaptureScreen({
   }, [camera, generation, prompts, signal, sleep, tickMs]);
 
   return (
-    <section aria-label="사진 촬영">
-      <p>{prompts[shotIndex]}</p>
-      <p aria-live="polite">{shotIndex + 1} / 6</p>
+    <section className="capture-screen" aria-label="사진 촬영">
       <video
+        className="capture-video"
         ref={videoRef}
         aria-label="카메라 미리보기"
         autoPlay
         muted
         playsInline
-        style={{ transform: "scaleX(-1)" }}
       />
-      <output aria-live="assertive">{countdown ?? ""}</output>
+      <div className="capture-overlay" aria-hidden="true" />
+      <p className="capture-progress" aria-live="polite">{shotIndex + 1} / 6</p>
+      <output className="capture-countdown" aria-live="assertive">{countdown ?? ""}</output>
+      <p className="capture-guidance">카메라를 바라봐 주세요</p>
     </section>
   );
 }

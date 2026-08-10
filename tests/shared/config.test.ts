@@ -13,6 +13,14 @@ const validEnv = {
 };
 
 describe("loadConfig", () => {
+  it("uses the UMC application page when the join URL is not configured", () => {
+    const { JOIN_SITE_URL: _joinSiteUrl, ...envWithoutJoinSite } = validEnv;
+
+    expect(loadConfig(envWithoutJoinSite).joinSiteUrl).toBe(
+      "https://university.neordinary.com/about",
+    );
+  });
+
   it("loads the exact booth runtime settings", () => {
     expect(loadConfig(validEnv)).toMatchObject({
       privatePort: 4173,

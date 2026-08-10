@@ -157,6 +157,10 @@ describe("TunnelSupervisor", () => {
     ]);
     harness.children[0]!.stderr.emit("notice\nhttps://calm-river.trycloudflare.com\n");
     expect(harness.supervisor.status()).toMatchObject({ state: "starting", publicUrl: null });
+    expect(harness.healthCalls).toEqual([]);
+    expect(harness.timers.delays).toContain(10_000);
+
+    harness.timers.runNext(10_000);
     expect(harness.healthCalls[0]![0]).toBe("https://calm-river.trycloudflare.com/health");
 
     harness.timers.nowValue = 1_042;
@@ -197,6 +201,12 @@ describe("TunnelSupervisor", () => {
 
     expect(supervisor.status()).toMatchObject({ state: "starting", publicUrl: null });
     expect(children[0]!.killed).toBe(0);
+    expect(probes).toBe(0);
+    expect(timers.delays).toContain(10_000);
+
+    timers.runNext(10_000);
+    await Promise.resolve();
+    await Promise.resolve();
     expect(timers.delays).toContain(1_000);
 
     timers.runNext(1_000);
@@ -250,6 +260,7 @@ describe("TunnelSupervisor", () => {
 
     const started = supervisor.start("http://127.0.0.1:4174");
     children[0]!.emitLine("https://calm-river.trycloudflare.com");
+    timers.runNext(10_000);
     await started;
     expect(probes).toBe(1);
 
@@ -321,6 +332,7 @@ describe("TunnelSupervisor", () => {
 
     const start = harness.supervisor.start("http://127.0.0.1:4174");
     harness.children[0]!.emitLine("https://calm-river.trycloudflare.com");
+    harness.timers.runNext(10_000);
     harness.health.resolve(new Response("ok"));
     await expect(start).resolves.toBeUndefined();
 

@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
+import { BrandMark } from "./BrandMark.js";
 import { ResetControl } from "./ResetControl.js";
 
 export interface BootstrapShellProps<T> {
@@ -36,14 +37,20 @@ export function BootstrapShell<T>({ load, onReady }: BootstrapShellProps<T>) {
 
   return (
     <>
-      <main>
-        <section aria-label="운영 화면 준비">
+      <main className="boot-screen">
+        <section className="boot-screen__panel glass-panel" aria-label="운영 화면 준비">
+          <BrandMark />
           {phase === "loading" ? (
-            <p aria-live="polite">운영 화면을 준비하는 중입니다</p>
+            <>
+              <h1>운영 화면을 준비하고 있어요</h1>
+              <p aria-live="polite">운영 화면을 준비하는 중입니다</p>
+              <div className="loading-dots" aria-hidden="true"><span /><span /><span /></div>
+            </>
           ) : (
-            <div role="alert">
-              <p>운영 화면을 준비하지 못했습니다</p>
-              <button type="button" onClick={retry}>다시 시도</button>
+            <div className="inline-alert" role="alert">
+              <h1>운영 화면을 준비하지 못했습니다</h1>
+              <p>카메라와 네트워크 상태를 확인한 뒤 다시 시도해 주세요.</p>
+              <button className="button button--primary" type="button" onClick={retry}>다시 시도</button>
             </div>
           )}
         </section>

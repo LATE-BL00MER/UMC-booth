@@ -121,48 +121,103 @@ function renderPhoto(
 ): boolean {
   if (!isCurrentPage(root, lifecycle)) return false;
   const container = root.createElement("main");
-  container.className = "recipient-page";
+  container.className = "recipient-page recipient-page--ready";
+  const brand = createBrand(root);
   const heading = root.createElement("h1");
-  heading.textContent = "사진이 준비되었습니다";
+  heading.textContent = "우리의 네컷이 도착했어요";
+  const photoFrame = root.createElement("div");
+  photoFrame.className = "recipient-photo-frame";
   const image = root.createElement("img");
   image.alt = "완성된 네컷 사진";
   const previewObjectUrl = dependencies.createObjectURL(photo);
   image.src = previewObjectUrl;
+  photoFrame.append(image);
+  const helper = createHelper(root, "사진은 이 기기 안에서만 복호화됐어요");
   const saveButton = root.createElement("button");
+  saveButton.className = "recipient-primary";
   saveButton.type = "button";
   saveButton.textContent = "사진 저장하기";
-  const joinLink = root.createElement("a");
-  joinLink.href = joinSiteUrl;
-  joinLink.textContent = "지원 페이지 보기";
-  joinLink.hidden = true;
-  joinLink.addEventListener("click", () => {
-    void sendEvent(dependencies.fetch, "join_click");
-  });
   saveButton.addEventListener("click", async () => {
     saveButton.disabled = true;
     try {
       await dependencies.savePhoto(photo, "umc-photo-booth.jpg");
-    } catch {
-      // A native share sheet can reject after it has already been opened.
-    } finally {
-      joinLink.hidden = false;
+      if (!isCurrentPage(root, lifecycle)) return;
+      renderSaveComplete(root, lifecycle, dependencies.fetch, joinSiteUrl);
       void sendEvent(dependencies.fetch, "save_intent");
+    } catch {
+      if (isCurrentPage(root, lifecycle)) saveButton.disabled = false;
     }
   });
-  container.append(heading, image, saveButton, joinLink);
+  container.append(brand, heading, photoFrame, helper, saveButton);
   root.body.replaceChildren(container);
   lifecycle.previewObjectUrl = previewObjectUrl;
   return true;
 }
 
+function renderSaveComplete(
+  root: Document,
+  lifecycle: RecipientPageLifecycle,
+  fetcher: typeof fetch,
+  joinSiteUrl: string,
+): void {
+  if (!isCurrentPage(root, lifecycle)) return;
+  if (lifecycle.previewObjectUrl) {
+    lifecycle.revokeObjectURL(lifecycle.previewObjectUrl);
+    lifecycle.previewObjectUrl = null;
+  }
+  const container = root.createElement("main");
+  container.className = "recipient-page recipient-page--complete";
+  const brand = createBrand(root);
+  const heading = root.createElement("h1");
+  heading.textContent = "사진을 저장했어요";
+  const joinLink = root.createElement("a");
+  joinLink.className = "recipient-primary recipient-complete-link";
+  joinLink.href = joinSiteUrl;
+  joinLink.textContent = "지원 페이지 바로가기";
+  joinLink.addEventListener("click", () => {
+    void sendEvent(fetcher, "join_click");
+  });
+  container.append(brand, heading, joinLink);
+  root.body.replaceChildren(container);
+}
+
 function renderMessage(root: Document, lifecycle: RecipientPageLifecycle, message: string): void {
   if (!isCurrentPage(root, lifecycle)) return;
   const container = root.createElement("main");
-  container.className = "recipient-page";
+  container.className = "recipient-page recipient-page--message";
+  const brand = createBrand(root);
   const heading = root.createElement("h1");
   heading.textContent = message;
-  container.append(heading);
+  const helper = createHelper(root, messageHelper(message));
+  container.append(brand, heading, helper);
   root.body.replaceChildren(container);
+}
+
+function createBrand(root: Document): HTMLParagraphElement {
+  const brand = root.createElement("p");
+  brand.className = "recipient-brand";
+  brand.textContent = "UMC PHOTO BOOTH";
+  return brand;
+}
+
+function createHelper(root: Document, text: string): HTMLParagraphElement {
+  const helper = root.createElement("p");
+  helper.className = "recipient-helper";
+  helper.textContent = text;
+  return helper;
+}
+
+function messageHelper(message: string): string {
+  if (message === "사진이 자동 삭제되었습니다") {
+    return "QR 발급 후 10분이 지나 암호화된 사진이 삭제됐습니다.";
+  }
+  if (message === "사진을 불러오지 못했습니다") {
+    return "네트워크 연결을 확인한 뒤 QR을 다시 열어 주세요.";
+  }
+  if (message === "사진을 찾을 수 없습니다") {
+    return "사진 주소가 올바른지 확인해 주세요.";
+  }
+  return "보안을 위해 평문 대체 링크는 제공하지 않습니다.";
 }
 
 function beginPage(root: Document, revokeObjectURL: (url: string) => void): RecipientPageLifecycle {
