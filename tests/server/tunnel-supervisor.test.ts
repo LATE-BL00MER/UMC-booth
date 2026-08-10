@@ -172,19 +172,54 @@ describe("TunnelSupervisor", () => {
     expect(reissued).toEqual(["https://calm-river.trycloudflare.com"]);
   });
 
-  it("marks a failed health check down and restarts with capped backoff", async () => {
+  it("retries initial health on the same tunnel while cloudflared finishes registering", async () => {
+    const timers = new TestTimers();
+    const children: TestChild[] = [];
+    let probes = 0;
+    const supervisor = new TunnelSupervisor({
+      spawn: () => {
+        const child = new TestChild();
+        children.push(child);
+        return child;
+      },
+      fetch: async () => {
+        probes += 1;
+        if (probes === 1) throw new TypeError("fetch failed");
+        return new Response("ok");
+      },
+      timers,
+    });
+
+    const started = supervisor.start("http://127.0.0.1:4174");
+    children[0]!.emitLine("https://calm-river.trycloudflare.com");
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(supervisor.status()).toMatchObject({ state: "starting", publicUrl: null });
+    expect(children[0]!.killed).toBe(0);
+    expect(timers.delays).toContain(1_000);
+
+    timers.runNext(1_000);
+    await started;
+
+    expect(probes).toBe(2);
+    expect(children).toHaveLength(1);
+    expect(supervisor.status()).toMatchObject({
+      state: "healthy",
+      publicUrl: "https://calm-river.trycloudflare.com",
+    });
+  });
+
+  it("marks an exited tunnel down and restarts with capped backoff", () => {
     const harness = createHarness();
     void harness.supervisor.start("http://127.0.0.1:4174");
-    harness.children[0]!.emitLine("https://calm-river.trycloudflare.com");
-    harness.health.resolve(new Response("not ready", { status: 503 }));
-    await Promise.resolve();
-    await Promise.resolve();
+    harness.children[0]!.exit();
 
     expect(harness.supervisor.status()).toEqual({
       state: "down",
       publicUrl: null,
       latencyMs: null,
-      error: "health-failed",
+      error: "process-exit",
     });
     expect(harness.timers.delays).toContain(1_000);
 
