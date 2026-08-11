@@ -52,13 +52,30 @@
   gap: var(--space-2);
 }
 
-.operator-steps span {
+.operator-step {
   padding: 8px 14px;
   border-radius: var(--radius-pill);
   color: var(--color-text-muted);
   font-size: 14px;
   font-weight: 600;
   transition: color var(--motion-fast) var(--ease-standard), background-color var(--motion-fast) var(--ease-standard);
+}
+
+.operator-back {
+  border: 0;
+  background: transparent;
+  font-family: inherit;
+  cursor: pointer;
+}
+
+.operator-back:hover {
+  color: var(--color-accent-default);
+  background: var(--color-accent-surface);
+}
+
+.operator-back:focus-visible {
+  outline: 2px solid var(--color-accent-default);
+  outline-offset: 2px;
 }
 
 .operator-steps [data-complete="true"] {
@@ -316,7 +333,7 @@
     padding-inline: 20px;
   }
 
-  .operator-steps span {
+  .operator-step {
     padding-inline: 10px;
   }
 

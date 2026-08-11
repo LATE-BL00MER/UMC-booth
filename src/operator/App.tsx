@@ -22,7 +22,7 @@ import type { DeliveryCoordinator } from "./delivery/delivery-coordinator.js";
 import type { IssuedSessionRegistry } from "./delivery/issued-session-registry.js";
 import type { PrivateApiClient } from "./delivery/private-api-client.js";
 import type { BrowserCompositor } from "./frames/browser-compositor.js";
-import type { FrameManifest } from "./frames/frame-contract.js";
+import { getCaptureAspectRatio, type FrameManifest } from "./frames/frame-contract.js";
 
 const RESET_PENDING_DELETE_TIMEOUT_MS = 500;
 const RESET_PREFLIGHT_TIMEOUT_MS = 2_000;
@@ -270,6 +270,21 @@ export function App({ services }: { services: AppServices }) {
     void resetCurrentSession();
   }, [dispatch, resetCurrentSession, startDelivery]);
 
+  const navigateBack = useCallback(() => {
+    const currentState = stateRef.current;
+    if (currentState.phase !== "capturing" && currentState.phase !== "selecting" && currentState.phase !== "framing") {
+      return;
+    }
+
+    if (currentState.phase !== "framing") {
+      currentAbortController.current.abort();
+      services.camera.stop();
+      revokePreviews(currentState);
+      currentAbortController.current = new AbortController();
+    }
+    dispatch({ type: "NAVIGATED_BACK" });
+  }, [dispatch, services.camera]);
+
   useEffect(() => {
     const servicesWereReplaced = mountedServices.current !== null && mountedServices.current !== services;
     mounted.current = true;
@@ -338,6 +353,7 @@ export function App({ services }: { services: AppServices }) {
     <OperatorShell
       phase={state.phase}
       status={preflightStatus}
+      onBack={navigateBack}
       onReset={() => void resetCurrentSession()}
     >
       {phaseScreen}
@@ -395,6 +411,7 @@ function renderPhase({
       return (
         <CaptureScreen
           camera={services.camera}
+          captureAspectRatio={getCaptureAspectRatio(services.frames)}
           prompts={services.prompts}
           generation={state.generation}
           signal={controller.signal}
@@ -407,10 +424,14 @@ function renderPhase({
       return (
         <SelectionScreen
           photos={state.photos}
+          photoAspectRatio={getCaptureAspectRatio(services.frames)}
           selectedIds={state.selectedIds}
           onToggle={(id) => dispatch({ type: "PHOTO_TOGGLED", id })}
           onClear={() => dispatch({ type: "SELECTION_CLEARED" })}
-          onContinue={() => dispatch({ type: "SELECTION_CONFIRMED" })}
+          onContinue={() => {
+            const defaultFrame = services.frames[0];
+            if (defaultFrame) dispatch({ type: "SELECTION_CONFIRMED", frameId: defaultFrame.id });
+          }}
         />
       );
     case "framing":

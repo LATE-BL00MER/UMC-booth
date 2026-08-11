@@ -9,6 +9,7 @@ import { MemoryIssuedSessionRegistry } from "./delivery/issued-session-registry.
 import { EncryptedDeliveryCoordinator } from "./delivery/delivery-coordinator.js";
 import { FetchPrivateApiClient } from "./delivery/private-api-client.js";
 import { BrowserCompositor } from "./frames/browser-compositor.js";
+import { getCaptureAspectRatio } from "./frames/frame-contract.js";
 import { loadFramePack } from "./frames/frame-repository.js";
 
 const root = document.querySelector("#root");
@@ -68,7 +69,7 @@ function createBrowserServices(
   const api = new FetchPrivateApiClient();
 
   return {
-    camera: new BrowserCameraPort(),
+    camera: new BrowserCameraPort(getCaptureAspectRatio(frames)),
     compositor: new BrowserCompositor(),
     delivery: new EncryptedDeliveryCoordinator(api, registry),
     registry,

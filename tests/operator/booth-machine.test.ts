@@ -111,9 +111,57 @@ describe("boothReducer", () => {
 
   it("requires exactly four selected photos before framing", () => {
     const selecting = selectingStateWithSixPhotos();
-    const result = boothReducer(selecting, { type: "SELECTION_CONFIRMED" });
+    const result = boothReducer(selecting, { type: "SELECTION_CONFIRMED", frameId: "basic" });
 
     expect(result).toBe(selecting);
+  });
+
+  it("opens framing with the first available frame already selected", () => {
+    let selecting = selectingStateWithSixPhotos();
+    for (const id of ["p4", "p1", "p6", "p3"]) {
+      selecting = boothReducer(selecting, { type: "PHOTO_TOGGLED", id });
+    }
+
+    const result = boothReducer(selecting, { type: "SELECTION_CONFIRMED", frameId: "basic" });
+
+    expect(result).toMatchObject({ phase: "framing", selectedFrameId: "basic" });
+  });
+
+  it("returns from framing to selection without losing the chosen photos", () => {
+    const framing: BoothState = {
+      ...selectingStateWithSixPhotos(),
+      phase: "framing",
+      selectedIds: ["p4", "p1", "p6", "p3"],
+      selectedFrameId: "basic",
+    };
+
+    const result = boothReducer(framing, { type: "NAVIGATED_BACK" });
+
+    expect(result).toMatchObject({
+      phase: "selecting",
+      selectedIds: ["p4", "p1", "p6", "p3"],
+      selectedFrameId: null,
+    });
+    expect(result.photos).toEqual(framing.photos);
+  });
+
+  it("starts a fresh capture when returning from selection", () => {
+    const selecting = selectingStateWithSixPhotos();
+
+    const result = boothReducer(selecting, { type: "NAVIGATED_BACK" });
+
+    expect(result).toMatchObject({
+      phase: "capturing",
+      generation: selecting.generation + 1,
+      photos: [],
+      selectedIds: [],
+    });
+  });
+
+  it("returns from capture to the welcome screen", () => {
+    const result = boothReducer(capturingState(3), { type: "NAVIGATED_BACK" });
+
+    expect(result).toMatchObject({ phase: "welcome", generation: 4, photos: [] });
   });
 
   it("rejects frame confirmation before four selections", () => {

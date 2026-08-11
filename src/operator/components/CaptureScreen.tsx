@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type CSSProperties } from "react";
 
 import type { CapturedPhoto } from "../booth-machine.js";
 import type { CameraPort } from "../camera/camera-port.js";
@@ -12,6 +12,7 @@ type PosePrompts = [string, string, string, string, string, string];
 
 export interface CaptureScreenProps {
   camera: CameraPort;
+  captureAspectRatio: number;
   prompts: PosePrompts;
   generation: number;
   signal: AbortSignal;
@@ -24,6 +25,7 @@ export interface CaptureScreenProps {
 
 export function CaptureScreen({
   camera,
+  captureAspectRatio,
   prompts,
   generation,
   signal,
@@ -37,6 +39,9 @@ export function CaptureScreen({
   const callbacksRef = useRef({ onPhotoCaptured, onRetry, onError });
   const [shotIndex, setShotIndex] = useState(0);
   const [countdown, setCountdown] = useState<5 | 4 | 3 | 2 | 1 | null>(null);
+  const captureViewportStyle = {
+    "--capture-aspect-ratio": captureAspectRatio,
+  } as CSSProperties;
 
   callbacksRef.current = { onPhotoCaptured, onRetry, onError };
 
@@ -93,18 +98,21 @@ export function CaptureScreen({
 
   return (
     <section className="capture-screen" aria-label="사진 촬영">
-      <video
-        className="capture-video"
-        ref={videoRef}
-        aria-label="카메라 미리보기"
-        autoPlay
-        muted
-        playsInline
-      />
-      <div className="capture-overlay" aria-hidden="true" />
+      <div className="capture-viewport" style={captureViewportStyle}>
+        <video
+          className="capture-video"
+          ref={videoRef}
+          aria-label="카메라 미리보기"
+          autoPlay
+          muted
+          playsInline
+        />
+        <div className="capture-overlay" aria-hidden="true" />
+      </div>
+      <p className="capture-prompt" aria-live="polite">{prompts[shotIndex]}</p>
       <p className="capture-progress" aria-live="polite">{shotIndex + 1} / 6</p>
       <output className="capture-countdown" aria-live="assertive">{countdown ?? ""}</output>
-      <p className="capture-guidance">카메라를 바라봐 주세요</p>
+      <p className="capture-guidance">테두리 안에 모두 들어오도록 위치해 주세요</p>
     </section>
   );
 }

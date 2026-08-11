@@ -8,6 +8,7 @@ import { ResetControl } from "./ResetControl.js";
 export interface OperatorShellProps {
   phase: BoothState["phase"];
   status: PreflightStatus | null;
+  onBack(): void;
   onReset(): void;
   children: ReactNode;
 }
@@ -29,9 +30,10 @@ function isComplete(step: string, current: string | null): boolean {
   return steps.findIndex(([value]) => value === step) < steps.findIndex(([value]) => value === current);
 }
 
-export function OperatorShell({ phase, status, onReset, children }: OperatorShellProps) {
+export function OperatorShell({ phase, status, onBack, onReset, children }: OperatorShellProps) {
   const current = visualStep(phase);
   const ready = status === null ? null : getPreflightReadiness(status, Date.now());
+  const canGoBack = phase === "capturing" || phase === "selecting" || phase === "framing";
 
   return (
     <div className="operator-shell" data-phase={phase}>
@@ -40,6 +42,7 @@ export function OperatorShell({ phase, status, onReset, children }: OperatorShel
         <nav className="operator-steps" aria-label="체험 진행 단계">
           {steps.map(([step, label]) => (
             <span
+              className="operator-step"
               key={step}
               aria-current={current === step ? "step" : undefined}
               data-complete={isComplete(step, current)}
@@ -47,6 +50,11 @@ export function OperatorShell({ phase, status, onReset, children }: OperatorShel
               {label}
             </span>
           ))}
+          {canGoBack ? (
+            <button className="operator-step operator-back" type="button" onClick={onBack}>
+              이전
+            </button>
+          ) : null}
         </nav>
         <div className="operator-tools">
           <span

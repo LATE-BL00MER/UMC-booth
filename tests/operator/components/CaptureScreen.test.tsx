@@ -39,6 +39,7 @@ describe("CaptureScreen", () => {
     render(
       <CaptureScreen
         camera={camera}
+        captureAspectRatio={7 / 9}
         prompts={prompts}
         generation={7}
         signal={controller.signal}
@@ -52,6 +53,7 @@ describe("CaptureScreen", () => {
     expect(screen.getByText("1 / 6")).toBeVisible();
     expect(screen.getByText("5")).toBeVisible();
     expect(screen.getByLabelText("카메라 미리보기")).toBe(camera.video);
+    expect(document.querySelector(".capture-viewport")).toHaveStyle({ "--capture-aspect-ratio": String(7 / 9) });
     expect(screen.queryByRole("button")).not.toBeInTheDocument();
 
     controller.abort();

@@ -1,14 +1,14 @@
 {
   "id": "basic",
   "label": "기본 프레임",
-  "canvas": { "width": 1200, "height": 1800 },
+  "canvas": { "width": 600, "height": 1080 },
   "jpegQuality": 0.92,
   "thumbnail": "overlay.svg",
   "overlay": "overlay.svg",
   "slots": [
-    { "x": 60, "y": 120, "width": 540, "height": 720, "rotation": 0, "fit": "cover" },
-    { "x": 600, "y": 120, "width": 540, "height": 720, "rotation": 0, "fit": "cover" },
-    { "x": 60, "y": 960, "width": 540, "height": 720, "rotation": 0, "fit": "cover" },
-    { "x": 600, "y": 960, "width": 540, "height": 720, "rotation": 0, "fit": "cover" }
+    { "x": 16, "y": 160, "width": 280, "height": 360, "rotation": 0, "fit": "cover" },
+    { "x": 304, "y": 160, "width": 280, "height": 360, "rotation": 0, "fit": "cover" },
+    { "x": 16, "y": 528, "width": 280, "height": 360, "rotation": 0, "fit": "cover" },
+    { "x": 304, "y": 528, "width": 280, "height": 360, "rotation": 0, "fit": "cover" }
   ]
 }

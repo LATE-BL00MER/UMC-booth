@@ -86,11 +86,13 @@ export function FrameScreen({
         {previewUrl ? (
           <img className="composed-preview" src={previewUrl} alt="선택한 프레임 합성 미리보기" />
         ) : null}
-        <div className="selected-photo-strip" aria-label="선택한 사진">
-          {selectedPhotos.map((photo, index) => (
-            <img key={photo.id} src={photo.previewUrl} alt={`선택한 사진 ${index + 1}`} />
-          ))}
-        </div>
+        {!hasSelectedFrame ? (
+          <div className="selected-photo-strip" aria-label="선택한 사진">
+            {selectedPhotos.map((photo, index) => (
+              <img key={photo.id} src={photo.previewUrl} alt={`선택한 사진 ${index + 1}`} />
+            ))}
+          </div>
+        ) : null}
       </div>
       <div className="frame-sidebar">
         <div>

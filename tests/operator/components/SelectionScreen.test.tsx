@@ -29,6 +29,7 @@ function SelectionHarness({ onToggle = vi.fn() }: { onToggle?: (id: string) => v
   return (
     <SelectionScreen
       photos={sixPhotos}
+      photoAspectRatio={7 / 9}
       selectedIds={selectedIds}
       onToggle={toggle}
       onClear={() => setSelectedIds([])}
@@ -38,6 +39,14 @@ function SelectionHarness({ onToggle = vi.fn() }: { onToggle?: (id: string) => v
 }
 
 describe("SelectionScreen", () => {
+  it("shows every candidate at the same aspect ratio as a frame photo slot", () => {
+    render(<SelectionHarness />);
+
+    expect(screen.getByLabelText("사진 선택")).toHaveStyle({
+      "--selection-photo-aspect-ratio": String(7 / 9),
+    });
+  });
+
   it("enables continuation only after four ordered selections", async () => {
     const user = userEvent.setup();
     const onToggle = vi.fn();

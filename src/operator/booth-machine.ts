@@ -27,7 +27,7 @@ export type BoothEvent =
   | { type: "PHOTO_CAPTURED"; generation: number; photo: CapturedPhoto }
   | { type: "PHOTO_TOGGLED"; id: string }
   | { type: "SELECTION_CLEARED" }
-  | { type: "SELECTION_CONFIRMED" }
+  | { type: "SELECTION_CONFIRMED"; frameId: string }
   | { type: "FRAME_SELECTED"; id: string }
   | { type: "FRAME_CONFIRMED" }
   | { type: "PENDING_SESSION_CREATED"; generation: number; id: string }
@@ -37,6 +37,7 @@ export type BoothEvent =
   | { type: "ISSUED_SESSION_DISPLAY_REQUESTED"; issued: IssuedSession }
   | { type: "DELIVERY_FAILED"; generation: number; message: string }
   | { type: "DELIVERY_RETRY_REQUESTED" }
+  | { type: "NAVIGATED_BACK" }
   | { type: "RESET_CONFIRMED" };
 
 export function initialBoothState(): BoothState {
@@ -107,8 +108,10 @@ export function boothReducer(state: BoothState, event: BoothEvent): BoothState {
         : state;
 
     case "SELECTION_CONFIRMED":
-      return state.phase === "selecting" && state.selectedIds.length === SELECTION_COUNT
-        ? { ...state, phase: "framing" }
+      return state.phase === "selecting" &&
+        state.selectedIds.length === SELECTION_COUNT &&
+        event.frameId.trim().length > 0
+        ? { ...state, phase: "framing", selectedFrameId: event.frameId }
         : state;
 
     case "FRAME_SELECTED":
@@ -172,6 +175,30 @@ export function boothReducer(state: BoothState, event: BoothEvent): BoothState {
         state.selectedFrameId !== null
         ? { ...state, phase: "delivering", errorMessage: null }
         : state;
+
+    case "NAVIGATED_BACK":
+      if (state.phase === "framing") {
+        return { ...state, phase: "selecting", selectedFrameId: null };
+      }
+      if (state.phase === "selecting") {
+        return {
+          ...state,
+          phase: "capturing",
+          generation: state.generation + 1,
+          photos: [],
+          selectedIds: [],
+          selectedFrameId: null,
+          errorMessage: null,
+        };
+      }
+      if (state.phase === "capturing") {
+        return {
+          ...initialBoothState(),
+          phase: "welcome",
+          generation: state.generation + 1,
+        };
+      }
+      return state;
 
     case "RESET_CONFIRMED":
       return { ...initialBoothState(), generation: state.generation + 1 };

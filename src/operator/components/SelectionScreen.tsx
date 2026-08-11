@@ -1,9 +1,12 @@
+import type { CSSProperties } from "react";
+
 import type { CapturedPhoto } from "../booth-machine.js";
 
 const REQUIRED_SELECTION_COUNT = 4;
 
 export interface SelectionScreenProps {
   photos: readonly CapturedPhoto[];
+  photoAspectRatio: number;
   selectedIds: readonly string[];
   onToggle(id: string): void;
   onClear(): void;
@@ -12,15 +15,19 @@ export interface SelectionScreenProps {
 
 export function SelectionScreen({
   photos,
+  photoAspectRatio,
   selectedIds,
   onToggle,
   onClear,
   onContinue,
 }: SelectionScreenProps) {
   const canContinue = selectedIds.length === REQUIRED_SELECTION_COUNT;
+  const selectionScreenStyle = {
+    "--selection-photo-aspect-ratio": photoAspectRatio,
+  } as CSSProperties;
 
   return (
-    <section className="selection-screen" aria-label="사진 선택">
+    <section className="selection-screen" style={selectionScreenStyle} aria-label="사진 선택">
       <header className="screen-heading">
         <div>
           <p className="eyebrow">SELECT FOUR</p>

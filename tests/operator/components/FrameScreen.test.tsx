@@ -143,6 +143,7 @@ describe("FrameScreen", () => {
       />,
     );
     expect(await screen.findByAltText("선택한 프레임 합성 미리보기")).toHaveAttribute("src", "blob:composed-preview");
+    expect(screen.queryByLabelText("선택한 사진")).not.toBeInTheDocument();
     expect((await compose.mock.results[0]!.value).type).toBe("image/jpeg");
     const [input] = compose.mock.calls[0]!;
     expect(await Promise.all(input.photos.map((photo) => photo.text()))).toEqual(["photo 4", "photo 1", "photo 3", "photo 2"]);

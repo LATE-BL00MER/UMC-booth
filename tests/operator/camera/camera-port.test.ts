@@ -184,6 +184,43 @@ describe("BrowserCameraPort", () => {
     expect(toBlob).toHaveBeenCalledWith(expect.any(Function), "image/jpeg", 0.92);
   });
 
+  it("center-crops the saved JPEG to the configured frame slot aspect ratio", async () => {
+    const { stream } = createStream();
+    installMediaDevices(vi.fn().mockResolvedValue(stream));
+    const video = readyVideo();
+    Object.defineProperty(video, "videoWidth", { configurable: true, value: 1280 });
+    Object.defineProperty(video, "videoHeight", { configurable: true, value: 720 });
+    const context = {
+      translate: vi.fn(),
+      scale: vi.fn(),
+      drawImage: vi.fn(),
+    };
+    const canvas = document.createElement("canvas");
+    const photo = new Blob(["jpeg"], { type: "image/jpeg" });
+    Object.defineProperty(canvas, "getContext", {
+      configurable: true,
+      value: vi.fn(() => context),
+    });
+    Object.defineProperty(canvas, "toBlob", {
+      configurable: true,
+      value: vi.fn((callback: BlobCallback) => callback(photo)),
+    });
+    const originalCreateElement = document.createElement.bind(document);
+    vi.spyOn(document, "createElement").mockImplementation(
+      ((tagName: string, options?: ElementCreationOptions) =>
+        tagName === "canvas" ? canvas : originalCreateElement(tagName, options)) as typeof document.createElement,
+    );
+    const port = new BrowserCameraPort(7 / 9);
+    await port.start(video);
+
+    await port.capture();
+
+    expect(canvas.width).toBe(560);
+    expect(canvas.height).toBe(720);
+    expect(context.translate).toHaveBeenCalledWith(560, 0);
+    expect(context.drawImage).toHaveBeenCalledWith(video, 360, 0, 560, 720, 0, 0, 560, 720);
+  });
+
   it("stops all active tracks and clears the preview source", async () => {
     const { stream, tracks } = createStream();
     installMediaDevices(vi.fn().mockResolvedValue(stream));

@@ -20,6 +20,12 @@ export class BrowserCameraPort implements CameraPort {
   private startGeneration = 0;
   private cancelMetadataWait: (() => void) | null = null;
 
+  constructor(private readonly captureAspectRatio: number | null = null) {
+    if (captureAspectRatio !== null && (!Number.isFinite(captureAspectRatio) || captureAspectRatio <= 0)) {
+      throw new TypeError("captureAspectRatio must be a positive finite number");
+    }
+  }
+
   async probe(): Promise<boolean> {
     let probeStream: MediaStream | null = null;
     try {
@@ -73,18 +79,33 @@ export class BrowserCameraPort implements CameraPort {
       throw new Error("Camera video is not ready");
     }
 
+    const crop = centeredCrop(width, height, this.captureAspectRatio);
     const canvas = document.createElement("canvas");
-    canvas.width = width;
-    canvas.height = height;
+    canvas.width = crop.width;
+    canvas.height = crop.height;
     const context = canvas.getContext("2d");
     if (!context) {
       throw new Error("Could not create a 2D canvas context");
     }
 
     // The preview is mirrored for the front-facing camera, so persist that same orientation.
-    context.translate(width, 0);
+    context.translate(canvas.width, 0);
     context.scale(-1, 1);
-    context.drawImage(this.video, 0, 0, width, height);
+    if (this.captureAspectRatio === null) {
+      context.drawImage(this.video, 0, 0, width, height);
+    } else {
+      context.drawImage(
+        this.video,
+        crop.x,
+        crop.y,
+        crop.width,
+        crop.height,
+        0,
+        0,
+        canvas.width,
+        canvas.height,
+      );
+    }
 
     return new Promise((resolve, reject) => {
       canvas.toBlob(
@@ -143,6 +164,21 @@ export class BrowserCameraPort implements CameraPort {
       if (!this.isCurrentStart(generation)) cancel();
     });
   }
+}
+
+function centeredCrop(width: number, height: number, targetAspectRatio: number | null) {
+  if (targetAspectRatio === null) return { x: 0, y: 0, width, height };
+
+  const sourceAspectRatio = width / height;
+  if (sourceAspectRatio > targetAspectRatio) {
+    const cropWidth = Math.max(1, Math.floor(height * targetAspectRatio));
+    return { x: (width - cropWidth) / 2, y: 0, width: cropWidth, height };
+  }
+  if (sourceAspectRatio < targetAspectRatio) {
+    const cropHeight = Math.max(1, Math.floor(width / targetAspectRatio));
+    return { x: 0, y: (height - cropHeight) / 2, width, height: cropHeight };
+  }
+  return { x: 0, y: 0, width, height };
 }
 
 function stopTracks(stream: MediaStream | null): void {
