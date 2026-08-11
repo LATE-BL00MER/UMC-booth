@@ -155,7 +155,7 @@ describe("App", () => {
 
     const start = await screen.findByRole("button", { name: "체험 시작" });
     expect(start).toBeDisabled();
-    expect(screen.getByText("사진은 암호화되어 QR 발급 10분 후 삭제됩니다")).toBeVisible();
+    expect(screen.getByText("사진은 암호화되어 QR 발급 5분 후 삭제됩니다")).toBeVisible();
 
     await user.click(screen.getByRole("checkbox", { name: "모든 팀원이 촬영에 동의했습니다" }));
     expect(start).toBeEnabled();

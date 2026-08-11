@@ -66,7 +66,7 @@ export function loadConfig(env: NodeJS.ProcessEnv): AppConfig {
     countdownSeconds: 5,
     captureCount: 6,
     selectedCount: 4,
-    activeTtlMs: testOnly ? (parsed.ACTIVE_TTL_MS ?? 600_000) : 600_000,
+    activeTtlMs: testOnly ? (parsed.ACTIVE_TTL_MS ?? 300_000) : 300_000,
     pendingTtlMs: testOnly ? (parsed.PENDING_TTL_MS ?? 120_000) : 120_000,
     sweepIntervalMs: testOnly ? (parsed.SWEEP_INTERVAL_MS ?? 30_000) : 30_000,
     countdownTickMs: testOnly ? (parsed.COUNTDOWN_TICK_MS ?? 1_000) : 1_000,

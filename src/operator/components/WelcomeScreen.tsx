@@ -16,11 +16,14 @@ export function WelcomeScreen({ onStart, acceptingCaptures, issuedSessions = [],
     <section className="welcome-screen" aria-label="시작 안내">
       <div className="welcome-hero">
         <p className="eyebrow">UNIVERSITY MAKEUS CHALLENGE</p>
-        <h1>우리의 순간을 네컷으로</h1>
-        <p className="welcome-lead">6장을 찍고 마음에 드는 4장을 골라요</p>
+        <h1>
+          <span>우리의 순간을</span>
+          <span>네컷으로.</span>
+        </h1>
+        <p className="welcome-lead">UMC와 함께 만들어 가는 순간</p>
       </div>
       <div className="welcome-consent glass-panel">
-        <p className="privacy-note">사진은 암호화되어 QR 발급 10분 후 삭제됩니다</p>
+        <p className="privacy-note">사진은 암호화되어 QR 발급 5분 후 삭제됩니다</p>
         <label className="consent-control">
           <input
             type="checkbox"

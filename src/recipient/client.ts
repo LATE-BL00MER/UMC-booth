@@ -209,7 +209,7 @@ function createHelper(root: Document, text: string): HTMLParagraphElement {
 
 function messageHelper(message: string): string {
   if (message === "사진이 자동 삭제되었습니다") {
-    return "QR 발급 후 10분이 지나 암호화된 사진이 삭제됐습니다.";
+    return "QR 발급 후 5분이 지나 암호화된 사진이 삭제됐습니다.";
   }
   if (message === "사진을 불러오지 못했습니다") {
     return "네트워크 연결을 확인한 뒤 QR을 다시 열어 주세요.";

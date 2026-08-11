@@ -61,7 +61,7 @@ export function QrScreen({ issued, exposeDeliveryUrl = false }: QrScreenProps) {
       <output className="qr-timer" data-tone={timerTone(remaining)} aria-live="polite">
         {formatRemaining(remaining)}
       </output>
-      <p className="qr-privacy">사진은 10분 후 자동으로 삭제됩니다</p>
+      <p className="qr-privacy">사진은 5분 후 자동으로 삭제됩니다</p>
     </section>
   );
 }
