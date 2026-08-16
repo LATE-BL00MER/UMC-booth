@@ -9,6 +9,7 @@
   "scripts": {
     "dev": "concurrently -k \"vite\" \"tsx watch src/server/index.ts\"",
     "build": "npm run build:operator && npm run build:recipient && npm run typecheck",
+    "build:vercel": "npm run build && node scripts/prepare-vercel-output.mjs",
     "build:operator": "vite build",
     "build:recipient": "node scripts/build-recipient.mjs",
     "typecheck": "tsc --noEmit",
@@ -19,6 +20,7 @@
   },
   "dependencies": {
     "@fastify/static": "^10.1.3",
+    "@vercel/blob": "^2.4.0",
     "fastify": "^5.11.3",
     "qrcode": "^1.5.4",
     "react": "^19.2.8",
@@ -39,7 +41,7 @@
     "esbuild": "^0.28.2",
     "jsdom": "^29.1.1",
     "tsx": "^4.23.11",
-    "typescript": "^7.0.2",
+    "typescript": "5.9.3",
     "vite": "^8.2.1",
     "vitest": "^4.1.10"
   }

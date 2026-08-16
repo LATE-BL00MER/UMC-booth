@@ -1,0 +1,30 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "framework": "vite",
+  "buildCommand": "npm run build:vercel",
+  "outputDirectory": "dist/operator",
+  "regions": ["icn1"],
+  "functions": {
+    "api/booth.ts": {
+      "includeFiles": "dist/recipient/index.html",
+      "maxDuration": 30
+    }
+  },
+  "rewrites": [
+    { "source": "/", "destination": "/operator.html" },
+    { "source": "/d/:token", "destination": "/api/booth?route=delivery&token=:token" },
+    { "source": "/f/:token", "destination": "/api/booth?route=file&token=:token" },
+    { "source": "/events", "destination": "/api/booth?route=events" },
+    { "source": "/api/status", "destination": "/api/booth?route=status" },
+    { "source": "/api/operator-config", "destination": "/api/booth?route=operator-config" },
+    { "source": "/api/metrics", "destination": "/api/booth?route=metrics" },
+    { "source": "/api/sessions/:id/activate", "destination": "/api/booth?route=activate&id=:id" },
+    { "source": "/api/sessions/:id/resolve", "destination": "/api/booth?route=resolve&id=:id" },
+    { "source": "/api/sessions/:id", "destination": "/api/booth?route=delete&id=:id" },
+    { "source": "/api/sessions", "destination": "/api/booth?route=sessions" },
+    { "source": "/api/cleanup", "destination": "/api/booth?route=cleanup" }
+  ],
+  "crons": [
+    { "path": "/api/cleanup", "schedule": "15 18 * * *" }
+  ]
+}
