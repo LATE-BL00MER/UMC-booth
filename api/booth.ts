@@ -38,6 +38,7 @@ async function routeRequest(request: Request): Promise<Response> {
   if (route === "file") return encryptedFile(request, url.searchParams.get("token"));
   if (route === "events") return recipientMetric(request);
   if (route === "cleanup") return scheduledCleanup(request);
+  if (route === "operator-login") return operatorLogin(request);
 
   if (!hasOperatorAccess(request)) return safeError(404);
   if (route === "status") return runtimeStatus(request, url);
@@ -48,6 +49,39 @@ async function routeRequest(request: Request): Promise<Response> {
   if (route === "resolve") return resolveSession(request, url.searchParams.get("id"));
   if (route === "delete") return deleteSession(request, url.searchParams.get("id"));
   return safeError(404);
+}
+
+async function operatorLogin(request: Request): Promise<Response> {
+  if (request.method !== "POST") return safeError(405);
+  if (request.headers.get("content-type")?.split(";", 1)[0]?.toLowerCase() !== "application/json") {
+    return safeError(415);
+  }
+  const declaredSize = Number(request.headers.get("content-length"));
+  if (Number.isFinite(declaredSize) && declaredSize > 128) return safeError(413);
+
+  let value: unknown;
+  try {
+    value = await request.json();
+  } catch {
+    return safeError(404);
+  }
+  const configuredPin = process.env.OPERATOR_PIN;
+  const operatorSecret = process.env.OPERATOR_SECRET;
+  if (!configuredPin || !operatorSecret || !exactPin(value) || !safeEqual(configuredPin, value.pin)) {
+    return safeError(404);
+  }
+  return json({ operatorKey: operatorSecret });
+}
+
+function exactPin(value: unknown): value is { pin: string } {
+  return Boolean(
+    value
+    && typeof value === "object"
+    && Object.keys(value).length === 1
+    && "pin" in value
+    && typeof value.pin === "string"
+    && /^\d{4}$/.test(value.pin),
+  );
 }
 
 async function runtimeStatus(request: Request, url: URL): Promise<Response> {

@@ -15,6 +15,7 @@
     { "source": "/d/:token", "destination": "/api/booth?route=delivery&token=:token" },
     { "source": "/f/:token", "destination": "/api/booth?route=file&token=:token" },
     { "source": "/events", "destination": "/api/booth?route=events" },
+    { "source": "/api/operator-login", "destination": "/api/booth?route=operator-login" },
     { "source": "/api/status", "destination": "/api/booth?route=status" },
     { "source": "/api/operator-config", "destination": "/api/booth?route=operator-config" },
     { "source": "/api/metrics", "destination": "/api/booth?route=metrics" },

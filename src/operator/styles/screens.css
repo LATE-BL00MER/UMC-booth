@@ -109,6 +109,43 @@
   z-index: 1;
 }
 
+.operator-login {
+  display: grid;
+  justify-items: center;
+  gap: 14px;
+  width: min(100%, 360px);
+}
+
+.operator-login label {
+  justify-self: start;
+  color: var(--color-text-secondary);
+  font-weight: 700;
+}
+
+.operator-login input {
+  width: 100%;
+  min-height: 64px;
+  padding: 0 20px;
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-control);
+  color: var(--color-text-primary);
+  background: rgba(255, 255, 255, .78);
+  font-size: 28px;
+  font-weight: 800;
+  letter-spacing: .28em;
+  text-align: center;
+}
+
+.operator-login .button {
+  width: 100%;
+}
+
+.operator-login__error {
+  margin: 0;
+  color: var(--color-status-danger);
+  font-weight: 700;
+}
+
 .welcome-hero h1 {
   max-width: 760px;
   margin: 12px 0 20px;

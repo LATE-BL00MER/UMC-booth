@@ -5,6 +5,7 @@ import "./styles/index.css";
 import { App, type AppServices, type RuntimePreflightStatus } from "./App.js";
 import { BrowserCameraPort } from "./camera/camera-port.js";
 import { BootstrapShell } from "./components/BootstrapShell.js";
+import { OperatorLogin } from "./components/OperatorLogin.js";
 import { MemoryIssuedSessionRegistry } from "./delivery/issued-session-registry.js";
 import { EncryptedDeliveryCoordinator } from "./delivery/delivery-coordinator.js";
 import { FetchPrivateApiClient } from "./delivery/private-api-client.js";
@@ -19,16 +20,32 @@ if (!root) {
 }
 
 const applicationRoot = createRoot(root);
-const operatorKey = readOperatorKey();
+const initialOperatorKey = readOperatorKey();
 
-applicationRoot.render(
-  <BootstrapShell
-    load={loadBrowserServices}
-    onReady={(services) => applicationRoot.render(<App services={services} />)}
-  />,
-);
+if (initialOperatorKey) {
+  renderBootstrap(initialOperatorKey);
+} else {
+  applicationRoot.render(
+    <OperatorLogin
+      authenticate={authenticateOperatorPin}
+      onAuthenticated={(operatorKey) => {
+        retainOperatorKey(operatorKey);
+        renderBootstrap(operatorKey);
+      }}
+    />,
+  );
+}
 
-async function loadBrowserServices(): Promise<AppServices> {
+function renderBootstrap(operatorKey: string): void {
+  applicationRoot.render(
+    <BootstrapShell
+      load={() => loadBrowserServices(operatorKey)}
+      onReady={(services) => applicationRoot.render(<App services={services} />)}
+    />,
+  );
+}
+
+async function loadBrowserServices(operatorKey: string): Promise<AppServices> {
   const [frames, prompts, runtimeConfig] = await Promise.all([
     loadOperatorFrames(),
     loadOperatorPrompts(),
@@ -39,6 +56,21 @@ async function loadBrowserServices(): Promise<AppServices> {
 
 async function loadOperatorFrames() {
   return loadFramePacks("/frame-pack");
+}
+
+async function authenticateOperatorPin(pin: string): Promise<string> {
+  const response = await fetch("/api/operator-login", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ pin }),
+    credentials: "same-origin",
+  });
+  if (!response.ok) throw new Error("Operator PIN was rejected");
+  const value: unknown = await response.json();
+  if (!isRecord(value) || typeof value.operatorKey !== "string" || value.operatorKey.length < 32) {
+    throw new Error("Operator login response is malformed");
+  }
+  return value.operatorKey;
 }
 
 async function loadOperatorPrompts(): Promise<[string, string, string, string, string, string]> {
@@ -189,6 +221,14 @@ function readOperatorKey(): string | null {
     return retained || null;
   } catch {
     return supplied;
+  }
+}
+
+function retainOperatorKey(operatorKey: string): void {
+  try {
+    window.sessionStorage.setItem("umc-photo-booth-operator-key", operatorKey);
+  } catch {
+    // The current page can still use the key when storage is unavailable.
   }
 }
 
