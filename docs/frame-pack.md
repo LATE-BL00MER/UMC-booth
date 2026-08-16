@@ -1,6 +1,6 @@
 # Frame-pack handoff
 
-Each pack contains a `manifest.json`, an overlay image, and a thumbnail image. Start by duplicating `assets/frame-packs/basic`, then give the new pack a unique `id` and update its human-readable `label`.
+`assets/frame-packs/index.json` lists the frame-pack folders shown in the operator. Each pack contains a `manifest.json`, an overlay image, and a thumbnail image. Start by duplicating `assets/frame-packs/basic`, then give the new pack a unique `id`, update its human-readable `label`, and add its folder name to the index.
 
 ## Assets and placement
 
@@ -16,4 +16,4 @@ From the repository root, validate frame behavior with:
 npm test -- tests/operator/frames
 ```
 
-Run the operator locally with `npm run dev`; the private listener exposes the configured pack at `/frame-pack/`. Confirm the overlay is on top of the four photos and that all slot measurements match the final canvas. The checked-in `basic` pack is a neutral runnable fixture, not the production visual design.
+Run the operator locally with `npm run dev`; the private listener exposes the configured pack collection at `/frame-pack/`. Confirm each overlay is on top of the four photos and that all slot measurements match the final canvas. The checked-in `basic` pack is a neutral fixture and is not listed in the production index.

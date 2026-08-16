@@ -28,7 +28,7 @@ const schema = z.object({
   PRIVATE_PORT: z.coerce.number().int().min(1024).max(65_535).default(4173),
   PUBLIC_PORT: z.coerce.number().int().min(1024).max(65_535).default(4174),
   SESSION_DIR: z.string().min(1).default("runtime-data/sessions"),
-  FRAME_PACK_DIR: z.string().min(1).default("assets/frame-packs/basic"),
+  FRAME_PACK_DIR: z.string().min(1).default("assets/frame-packs"),
   POSE_CONFIG_PATH: z.string().min(1).default("assets/poses/poses.json"),
   COUNTDOWN_TICK_MS: z.coerce.number().int().min(1).optional(),
   ACTIVE_TTL_MS: z.coerce.number().int().min(1).optional(),

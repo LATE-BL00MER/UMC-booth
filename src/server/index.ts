@@ -1,6 +1,6 @@
 import { readFile } from "node:fs/promises";
-import { basename, dirname, resolve } from "node:path";
-import { parseFrameManifest } from "../operator/frames/frame-repository";
+import { basename, resolve } from "node:path";
+import { parseFrameManifest, parseFramePackIndex } from "../operator/frames/frame-repository";
 import { loadConfig } from "../shared/config";
 import { AggregateMetrics } from "./metrics";
 import { buildPrivateServer } from "./private-server";
@@ -48,20 +48,24 @@ async function main(): Promise<void> {
 }
 
 async function validatePrebuiltAssets(operatorBuildDir: string, framePackDir: string, poseConfigPath: string): Promise<void> {
-  const [, manifestText, posesText] = await Promise.all([
+  const [, framePackIndexText, posesText] = await Promise.all([
     readFile(resolve(operatorBuildDir, "operator.html"), "utf8"),
-    readFile(resolve(framePackDir, "manifest.json"), "utf8"),
+    readFile(resolve(framePackDir, "index.json"), "utf8"),
     readFile(poseConfigPath, "utf8"),
   ]);
-  const manifest = parseFrameManifest(JSON.parse(manifestText));
+  const packIds = parseFramePackIndex(JSON.parse(framePackIndexText));
+  await Promise.all(packIds.map(async (packId) => {
+    const manifestText = await readFile(resolve(framePackDir, packId, "manifest.json"), "utf8");
+    const manifest = parseFrameManifest(JSON.parse(manifestText));
+    await Promise.all([
+      readFile(resolve(framePackDir, packId, basename(manifest.thumbnail))),
+      readFile(resolve(framePackDir, packId, basename(manifest.overlay))),
+    ]);
+  }));
   const poses: unknown = JSON.parse(posesText);
   if (!Array.isArray(poses) || poses.length !== 6 || poses.some((pose) => typeof pose !== "string" || pose.trim().length === 0)) {
     throw new Error("Pose prompts must contain six non-empty strings");
   }
-  await Promise.all([
-    readFile(resolve(dirname(resolve(framePackDir, "manifest.json")), basename(manifest.thumbnail))),
-    readFile(resolve(dirname(resolve(framePackDir, "manifest.json")), basename(manifest.overlay))),
-  ]);
 }
 
 void main().catch(() => {

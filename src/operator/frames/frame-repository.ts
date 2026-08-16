@@ -22,8 +22,27 @@ const frameManifestSchema = z.object({
   slots: z.array(photoSlotSchema).length(4, "Frame requires exactly four slots"),
 });
 
+const framePackIndexSchema = z.object({
+  packs: z.array(z.string().regex(/^[a-z0-9][a-z0-9-]*$/)).min(1),
+});
+
 export function parseFrameManifest(value: unknown): FrameManifest {
   return frameManifestSchema.parse(value) as FrameManifest;
+}
+
+export function parseFramePackIndex(value: unknown): string[] {
+  return framePackIndexSchema.parse(value).packs;
+}
+
+export async function loadFramePacks(baseUrl: string, fetcher: Fetcher = fetch): Promise<FrameManifest[]> {
+  const normalizedBaseUrl = baseUrl.replace(/\/+$/, "");
+  const response = await fetcher(`${normalizedBaseUrl}/index.json`);
+  if (!response.ok) {
+    throw new Error(`Could not load frame pack index (${response.status})`);
+  }
+
+  const packIds = parseFramePackIndex(await response.json());
+  return Promise.all(packIds.map((packId) => loadFramePack(`${normalizedBaseUrl}/${packId}`, fetcher)));
 }
 
 type Fetcher = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;

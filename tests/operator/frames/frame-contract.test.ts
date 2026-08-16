@@ -1,5 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
-import { loadFramePack, parseFrameManifest } from "../../../src/operator/frames/frame-repository";
+import {
+  loadFramePack,
+  loadFramePacks,
+  parseFrameManifest,
+  parseFramePackIndex,
+} from "../../../src/operator/frames/frame-repository";
 
 const validFrame = {
   id: "basic",
@@ -42,5 +47,25 @@ describe("frame manifests", () => {
       overlay: "/frame-pack/basic/overlay.svg",
     });
     expect(fetcher).toHaveBeenCalledWith("/frame-pack/basic/manifest.json");
+  });
+
+  it("loads every frame listed by the pack index in order", async () => {
+    const fetcher = vi.fn(async (input: RequestInfo | URL) => {
+      if (String(input) === "/frame-pack/index.json") {
+        return new Response(JSON.stringify({ packs: ["sky", "ticket"] }));
+      }
+      const id = String(input).includes("/sky/") ? "sky" : "ticket";
+      return new Response(JSON.stringify({ ...validFrame, id, label: id }));
+    });
+
+    await expect(loadFramePacks("/frame-pack/", fetcher)).resolves.toEqual([
+      expect.objectContaining({ id: "sky", overlay: "/frame-pack/sky/overlay.svg" }),
+      expect.objectContaining({ id: "ticket", overlay: "/frame-pack/ticket/overlay.svg" }),
+    ]);
+  });
+
+  it("rejects unsafe or empty frame pack indexes", () => {
+    expect(() => parseFramePackIndex({ packs: [] })).toThrow();
+    expect(() => parseFramePackIndex({ packs: ["../secret"] })).toThrow();
   });
 });

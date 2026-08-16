@@ -10,7 +10,7 @@ import { EncryptedDeliveryCoordinator } from "./delivery/delivery-coordinator.js
 import { FetchPrivateApiClient } from "./delivery/private-api-client.js";
 import { BrowserCompositor } from "./frames/browser-compositor.js";
 import { getCaptureAspectRatio } from "./frames/frame-contract.js";
-import { loadFramePack } from "./frames/frame-repository.js";
+import { loadFramePacks } from "./frames/frame-repository.js";
 
 const root = document.querySelector("#root");
 
@@ -37,7 +37,7 @@ async function loadBrowserServices(): Promise<AppServices> {
 }
 
 async function loadOperatorFrames() {
-  return [await loadFramePack("/frame-pack")];
+  return loadFramePacks("/frame-pack");
 }
 
 async function loadOperatorPrompts(): Promise<[string, string, string, string, string, string]> {

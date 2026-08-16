@@ -1,6 +1,6 @@
 {
-  "id": "basic",
-  "label": "기본 프레임",
+  "id": "umcism-ticket",
+  "label": "네컷 2 · 탑승권",
   "canvas": { "width": 600, "height": 1080 },
   "jpegQuality": 0.92,
   "thumbnail": "overlay.png",
