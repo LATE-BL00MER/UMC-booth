@@ -1,5 +1,5 @@
 :root {
-  color-scheme: dark;
+  color-scheme: light;
   font-family: Pretendard, "Pretendard Variable", Inter, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
   font-synthesis: none;
 }
@@ -8,8 +8,8 @@
 
 body {
   margin: 0;
-  background: #050807;
-  color: #f7faf8;
+  background: #dbf2f6;
+  color: #102a30;
 }
 
 body::before {
@@ -17,9 +17,9 @@ body::before {
   inset: 0;
   z-index: -1;
   background:
-    radial-gradient(circle at 18% 12%, rgba(161, 255, 119, 0.16), transparent 30rem),
-    radial-gradient(circle at 82% 86%, rgba(74, 135, 255, 0.13), transparent 28rem),
-    linear-gradient(160deg, #0a0f0d 0%, #050807 58%);
+    radial-gradient(circle at 18% 12%, rgba(255, 255, 255, 0.78), transparent 30rem),
+    radial-gradient(circle at 82% 86%, rgba(91, 190, 207, 0.16), transparent 28rem),
+    linear-gradient(160deg, #eaf9fb 0%, #dbf2f6 58%);
   content: "";
 }
 
@@ -36,7 +36,7 @@ body::before {
 
 .recipient-brand {
   margin: 0 0 0.25rem;
-  color: #a1ff77;
+  color: #16877d;
   font-size: 0.75rem;
   font-weight: 800;
   letter-spacing: 0.2em;
@@ -51,7 +51,7 @@ body::before {
 
 .recipient-helper {
   margin: 0 0 0.25rem;
-  color: #a9b3ad;
+  color: #597279;
   font-size: 0.875rem;
   line-height: 1.55;
 }
@@ -62,10 +62,10 @@ body::before {
   padding: 0.75rem;
   overflow: hidden;
   place-items: center;
-  background: rgba(15, 21, 18, 0.88);
-  border: 1px solid rgba(255, 255, 255, 0.1);
+  background: rgba(255, 255, 255, 0.78);
+  border: 1px solid rgba(32, 91, 101, 0.16);
   border-radius: 1.5rem;
-  box-shadow: 0 1.5rem 4rem rgba(0, 0, 0, 0.38);
+  box-shadow: 0 1.5rem 4rem rgba(37, 87, 96, 0.18);
 }
 
 .recipient-photo-frame img {
@@ -94,10 +94,18 @@ body::before {
 .recipient-page a:active { transform: scale(0.985); }
 
 .recipient-primary {
-  border: 0;
-  background: #a1ff77;
-  color: #071006;
+  min-height: 3.75rem;
+  border: 1px solid rgba(215, 255, 248, 0.78);
+  background: linear-gradient(135deg, #c9fff5 0%, #66ffe3 52%, #65d9ff 100%);
+  box-shadow: 0 0 0 1px rgba(102, 255, 227, 0.38), 0 0 1.25rem rgba(102, 255, 227, 0.34), 0 0 2.75rem rgba(101, 217, 255, 0.18);
+  color: #031412;
   cursor: pointer;
+}
+
+.recipient-primary:not(:disabled):hover {
+  background: linear-gradient(135deg, #edfffb 0%, #8cffe9 48%, #8ee5ff 100%);
+  box-shadow: 0 0 0 1px rgba(215, 255, 248, 0.72), 0 0 1.5rem rgba(102, 255, 227, 0.52), 0 0 3.5rem rgba(101, 217, 255, 0.28);
+  transform: translateY(-1px);
 }
 
 .recipient-primary:disabled {
@@ -106,9 +114,9 @@ body::before {
 }
 
 .recipient-secondary {
-  border: 1px solid rgba(255, 255, 255, 0.14);
-  background: rgba(255, 255, 255, 0.07);
-  color: #f7faf8;
+  border: 1px solid rgba(22, 135, 125, 0.28);
+  background: rgba(255, 255, 255, 0.7);
+  color: #102a30;
 }
 
 .recipient-page--complete {
@@ -126,8 +134,7 @@ body::before {
 .recipient-page--complete h1 { margin-bottom: 1rem; }
 
 .recipient-complete-link {
-  min-height: 3.25rem;
-  box-shadow: 0 1rem 2.5rem rgba(161, 255, 119, 0.12);
+  min-height: 3.75rem;
 }
 
 .recipient-page--message { max-width: 26rem; }
@@ -136,8 +143,8 @@ body::before {
   width: 2rem;
   height: 2rem;
   margin: 0.75rem auto 0;
-  border: 2px solid rgba(255, 255, 255, 0.12);
-  border-top-color: #a1ff77;
+  border: 2px solid rgba(22, 135, 125, 0.16);
+  border-top-color: #16877d;
   border-radius: 999px;
   animation: recipient-spin 800ms linear infinite;
 }

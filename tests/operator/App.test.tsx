@@ -122,9 +122,9 @@ describe("App", () => {
     fakeServices.compositor = { compose };
     render(<App services={fakeServices} />);
 
-    await screen.findByRole("button", { name: "체험 시작" });
+    await screen.findByRole("button", { name: "촬영 시작" });
     await user.click(screen.getByRole("checkbox", { name: "모든 팀원이 촬영에 동의했습니다" }));
-    await user.click(screen.getByRole("button", { name: "체험 시작" }));
+    await user.click(screen.getByRole("button", { name: "촬영 시작" }));
     await (fakeServices.camera as FakeCamera).finishSixShots();
     for (const number of [4, 1, 6, 3]) {
       await user.click(screen.getByAltText(`촬영 사진 ${number}`));
@@ -137,7 +137,7 @@ describe("App", () => {
     await user.click(screen.getByRole("button", { name: "처음으로" }));
     await user.click(screen.getByRole("button", { name: "확인" }));
 
-    expect(await screen.findByRole("button", { name: "체험 시작" })).toBeVisible();
+    expect(await screen.findByRole("button", { name: "촬영 시작" })).toBeVisible();
     expect(fakeServices.registry.activeCount()).toBe(1);
     const [composition] = compose.mock.calls[0]!;
     expect(await Promise.all(composition.photos.map((photo) => photo.text()))).toEqual([
@@ -153,8 +153,9 @@ describe("App", () => {
     const services = createFakeServices();
     render(<App services={services} />);
 
-    const start = await screen.findByRole("button", { name: "체험 시작" });
+    const start = await screen.findByRole("button", { name: "촬영 시작" });
     expect(start).toBeDisabled();
+    expect(screen.getByRole("button", { name: "이전 QR 다시 보기" })).toBeDisabled();
     expect(screen.getByText("사진은 암호화되어 QR 발급 5분 후 삭제됩니다")).toBeVisible();
 
     await user.click(screen.getByRole("checkbox", { name: "모든 팀원이 촬영에 동의했습니다" }));
@@ -187,7 +188,7 @@ describe("App", () => {
 
     await flushReact();
     fireEvent.click(screen.getByRole("checkbox", { name: "모든 팀원이 촬영에 동의했습니다" }));
-    expect(screen.getByRole("button", { name: "체험 시작" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "촬영 시작" })).toBeEnabled();
 
     currentStatus = {
       ...runtimeReadyStatus(),
@@ -197,7 +198,7 @@ describe("App", () => {
     await act(async () => { await vi.advanceTimersByTimeAsync(2_000); });
     await flushReact();
 
-    const start = screen.getByRole("button", { name: "체험 시작" });
+    const start = screen.getByRole("button", { name: "촬영 시작" });
     expect(start).toBeDisabled();
     fireEvent.click(start);
     expect(screen.queryByLabelText("촬영")) .not.toBeInTheDocument();
@@ -222,7 +223,7 @@ describe("App", () => {
     await act(async () => { await vi.advanceTimersByTimeAsync(2_000); });
     await flushReact();
 
-    const start = screen.getByRole("button", { name: "체험 시작" });
+    const start = screen.getByRole("button", { name: "촬영 시작" });
     expect(start).toBeDisabled();
     fireEvent.click(start);
     expect((services.camera as FakeCamera).captureCount).toBe(0);
@@ -234,8 +235,9 @@ describe("App", () => {
     services.registry.add(issuedSession(), "kept-out-of-app-state");
     render(<App services={services} />);
 
-    await screen.findByRole("button", { name: "체험 시작" });
-    await user.click(screen.getByRole("button", { name: "이전 QR 다시 표시" }));
+    await screen.findByRole("button", { name: "촬영 시작" });
+    expect(screen.getByRole("button", { name: "이전 QR 다시 보기" })).toBeEnabled();
+    await user.click(screen.getByRole("button", { name: "이전 QR 다시 보기" }));
 
     expect(await screen.findByLabelText("QR 코드")).toBeVisible();
     expect(vi.mocked(toDataURL)).toHaveBeenLastCalledWith(
@@ -253,7 +255,7 @@ describe("App", () => {
 
     const expectReset = () => expect(screen.getByRole("button", { name: "처음으로" })).toBeVisible();
     expectReset();
-    await screen.findByRole("button", { name: "체험 시작" });
+    await screen.findByRole("button", { name: "촬영 시작" });
     expectReset();
     await startExperience(user);
     expect(await screen.findByLabelText("사진 촬영")).toBeVisible();
@@ -289,8 +291,8 @@ describe("App", () => {
 
     expect(await screen.findByRole("alert")).toBeVisible();
     expect(screen.getAllByRole("button").map((button) => button.textContent)).toEqual([
-      "다시 시도",
       "처음으로",
+      "다시 시도",
     ]);
   });
 
@@ -309,10 +311,10 @@ describe("App", () => {
 
     await user.click(screen.getByRole("button", { name: "처음으로" }));
     await user.click(screen.getByRole("button", { name: "확인" }));
-    expect(await screen.findByRole("button", { name: "체험 시작" })).toBeVisible();
+    expect(await screen.findByRole("button", { name: "촬영 시작" })).toBeVisible();
 
     await act(async () => firstRead.resolve(runtimeReadyStatus()));
-    expect(screen.getByRole("button", { name: "체험 시작" })).toBeVisible();
+    expect(screen.getByRole("button", { name: "촬영 시작" })).toBeVisible();
   });
 
   it("ignores a capture completing after reset and does not revive the old session", async () => {
@@ -325,11 +327,11 @@ describe("App", () => {
     await startExperience(user);
     await waitFor(() => expect(camera.captureStarted).toBe(1));
     await reset(user);
-    expect(await screen.findByRole("button", { name: "체험 시작" })).toBeVisible();
+    expect(await screen.findByRole("button", { name: "촬영 시작" })).toBeVisible();
 
     camera.photo.resolve(new Blob(["old photo"], { type: "image/jpeg" }));
     await act(async () => undefined);
-    expect(screen.getByRole("button", { name: "체험 시작" })).toBeVisible();
+    expect(screen.getByRole("button", { name: "촬영 시작" })).toBeVisible();
     expect(screen.queryByLabelText("사진 선택")).not.toBeInTheDocument();
   });
 
@@ -344,11 +346,11 @@ describe("App", () => {
     await user.click(screen.getByRole("button", { name: "이 프레임으로 사진 만들기" }));
     expect(await screen.findByLabelText("사진 발급")).toBeVisible();
     await reset(user);
-    expect(await screen.findByRole("button", { name: "체험 시작" })).toBeVisible();
+    expect(await screen.findByRole("button", { name: "촬영 시작" })).toBeVisible();
 
     delivery.resolve(issuedSession());
     await act(async () => undefined);
-    expect(screen.getByRole("button", { name: "체험 시작" })).toBeVisible();
+    expect(screen.getByRole("button", { name: "촬영 시작" })).toBeVisible();
     expect(screen.queryByLabelText("QR 코드")).not.toBeInTheDocument();
   });
 
@@ -374,7 +376,7 @@ describe("App", () => {
     expect(screen.queryByAltText("선택한 사진 1")).not.toBeInTheDocument();
 
     await reset(user);
-    expect(await screen.findByRole("button", { name: "체험 시작" })).toBeVisible();
+    expect(await screen.findByRole("button", { name: "촬영 시작" })).toBeVisible();
     expect(revoke).toHaveBeenCalledTimes(7);
     expect(services.registry.activeCount()).toBe(1);
   });
@@ -445,7 +447,7 @@ describe("App", () => {
     expect(screen.getByLabelText("사진 발급")).toBeVisible();
 
     deletion.resolve();
-    expect(await screen.findByRole("button", { name: "체험 시작" })).toBeVisible();
+    expect(await screen.findByRole("button", { name: "촬영 시작" })).toBeVisible();
     expect(calls.slice(-2)).toEqual(["camera.probe", "preflight"]);
   });
 
@@ -466,7 +468,7 @@ describe("App", () => {
 
     await flushReact();
     fireEvent.click(screen.getByRole("checkbox", { name: "모든 팀원이 촬영에 동의했습니다" }));
-    fireEvent.click(screen.getByRole("button", { name: "체험 시작" }));
+    fireEvent.click(screen.getByRole("button", { name: "촬영 시작" }));
     await flushReact();
     await act(async () => {
       await vi.advanceTimersByTimeAsync(100);
@@ -493,7 +495,7 @@ describe("App", () => {
     });
     await flushReact();
 
-    expect(screen.getByRole("button", { name: "체험 시작" })).toBeVisible();
+    expect(screen.getByRole("button", { name: "촬영 시작" })).toBeVisible();
     expect(deletion).toHaveBeenCalledWith("pending-before-reset");
   });
 
@@ -519,7 +521,7 @@ describe("App", () => {
     render(<App services={services} />);
 
     await flushReact();
-    expect(screen.getByRole("button", { name: "체험 시작" })).toBeVisible();
+    expect(screen.getByRole("button", { name: "촬영 시작" })).toBeVisible();
     fireEvent.click(screen.getByRole("button", { name: "처음으로" }));
     fireEvent.click(screen.getByRole("button", { name: "확인" }));
     await act(async () => {
@@ -528,8 +530,8 @@ describe("App", () => {
 
     expect(screen.getByRole("alert")).toBeVisible();
     expect(screen.getAllByRole("button").map((button) => button.textContent)).toEqual([
-      "다시 시도",
       "처음으로",
+      "다시 시도",
     ]);
   });
 
@@ -541,7 +543,7 @@ describe("App", () => {
 
     rerender(<App services={replacementServices} />);
 
-    expect(await screen.findByRole("button", { name: "체험 시작" })).toBeVisible();
+    expect(await screen.findByRole("button", { name: "촬영 시작" })).toBeVisible();
   });
 
   it("keeps a stale preflight URL from replacing the validated delivery URL", async () => {
@@ -572,7 +574,7 @@ describe("App", () => {
     render(<App services={services} />);
 
     await reset(user);
-    expect(await screen.findByRole("button", { name: "체험 시작" })).toBeVisible();
+    expect(await screen.findByRole("button", { name: "촬영 시작" })).toBeVisible();
     stale.resolve({
       ...runtimeReadyStatus(),
       tunnel: { state: "healthy", publicUrl: "https://stale.example", latencyMs: 12, error: null },
@@ -603,10 +605,10 @@ describe("App", () => {
     const reissue = vi.spyOn(services.registry, "reissueAll");
     render(<App services={services} />);
 
-    await screen.findByRole("button", { name: "체험 시작" });
+    await screen.findByRole("button", { name: "촬영 시작" });
     await reset(user);
 
-    expect(await screen.findByRole("button", { name: "체험 시작" })).toBeVisible();
+    expect(await screen.findByRole("button", { name: "촬영 시작" })).toBeVisible();
     expect(reissue).toHaveBeenCalledExactlyOnceWith("https://new.example");
   });
 
@@ -626,7 +628,7 @@ describe("App", () => {
 
     await flushReact();
     fireEvent.click(screen.getByRole("checkbox", { name: "모든 팀원이 촬영에 동의했습니다" }));
-    fireEvent.click(screen.getByRole("button", { name: "체험 시작" }));
+    fireEvent.click(screen.getByRole("button", { name: "촬영 시작" }));
     await act(async () => { await vi.advanceTimersByTimeAsync(100); });
     for (const number of [4, 1, 6, 3]) fireEvent.click(screen.getByAltText(`촬영 사진 ${number}`));
     fireEvent.click(screen.getByRole("button", { name: "프레임 선택하기" }));
@@ -666,7 +668,7 @@ describe("App", () => {
 
     await flushReact();
     fireEvent.click(screen.getByRole("checkbox", { name: "모든 팀원이 촬영에 동의했습니다" }));
-    fireEvent.click(screen.getByRole("button", { name: "체험 시작" }));
+    fireEvent.click(screen.getByRole("button", { name: "촬영 시작" }));
     await act(async () => { await vi.advanceTimersByTimeAsync(100); });
     for (const number of [4, 1, 6, 3]) fireEvent.click(screen.getByAltText(`촬영 사진 ${number}`));
     fireEvent.click(screen.getByRole("button", { name: "프레임 선택하기" }));
@@ -709,9 +711,9 @@ class BlockingCamera implements CameraPort {
 }
 
 async function startExperience(user: ReturnType<typeof userEvent.setup>): Promise<void> {
-  await screen.findByRole("button", { name: "체험 시작" });
+  await screen.findByRole("button", { name: "촬영 시작" });
   await user.click(screen.getByRole("checkbox", { name: "모든 팀원이 촬영에 동의했습니다" }));
-  await user.click(screen.getByRole("button", { name: "체험 시작" }));
+  await user.click(screen.getByRole("button", { name: "촬영 시작" }));
 }
 
 async function startAndReachFrame(user: ReturnType<typeof userEvent.setup>, services: AppServices): Promise<void> {

@@ -15,7 +15,7 @@ test.describe.serial("reset, recipient isolation, expiry, and cleanup", () => {
     await expect(page.getByLabel("사진 촬영")).toBeVisible();
     await resetToWelcome(page);
     await page.waitForTimeout(500);
-    await expect(page.getByRole("button", { name: "체험 시작" })).toBeVisible();
+    await expect(page.getByRole("button", { name: "촬영 시작" })).toBeVisible();
 
     await reachSelection(page);
     await resetToWelcome(page);
@@ -119,12 +119,12 @@ test.describe.serial("reset, recipient isolation, expiry, and cleanup", () => {
 
 async function openWelcome(page: Page): Promise<void> {
   await page.goto("/");
-  await expect(page.getByRole("button", { name: "체험 시작" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "촬영 시작" })).toBeVisible();
 }
 
 async function startCapture(page: Page): Promise<void> {
   await page.getByRole("checkbox", { name: "모든 팀원이 촬영에 동의했습니다" }).check();
-  await page.getByRole("button", { name: "체험 시작" }).click();
+  await page.getByRole("button", { name: "촬영 시작" }).click();
 }
 
 async function reachSelection(page: Page): Promise<void> {
@@ -156,5 +156,5 @@ async function issuePhoto(page: Page): Promise<string> {
 async function resetToWelcome(page: Page): Promise<void> {
   await page.getByRole("button", { name: "처음으로" }).click();
   await page.getByRole("button", { name: "확인" }).click();
-  await expect(page.getByRole("button", { name: "체험 시작" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "촬영 시작" })).toBeVisible();
 }

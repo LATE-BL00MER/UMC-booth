@@ -1,32 +1,34 @@
 :root {
-  color-scheme: dark;
-  --color-bg-canvas: #000000;
-  --color-bg-app: #050807;
-  --color-bg-photo: #0b0f0e;
-  --color-surface-default: #111716;
-  --color-surface-raised: #17201e;
-  --color-surface-glass: rgba(12, 42, 37, 0.72);
-  --color-surface-glass-subtle: rgba(12, 42, 37, 0.42);
-  --color-surface-scrim: rgba(0, 0, 0, 0.72);
+  color-scheme: light;
+  --color-bg-canvas: #dbf2f6;
+  --color-bg-app: #dbf2f6;
+  --color-bg-photo: #c9e4e9;
+  --color-surface-default: #ffffff;
+  --color-surface-raised: #f7fcfd;
+  --color-surface-glass: rgba(255, 255, 255, 0.76);
+  --color-surface-glass-subtle: rgba(255, 255, 255, 0.54);
+  --color-surface-scrim: rgba(25, 55, 62, 0.42);
 
-  --color-text-primary: #ffffff;
-  --color-text-secondary: #d3d8d8;
-  --color-text-muted: #899291;
-  --color-text-on-accent: #031412;
+  --color-text-primary: #102a30;
+  --color-text-secondary: #47636a;
+  --color-text-muted: #758d93;
+  --color-text-on-accent: #04231f;
 
-  --color-accent-primary: #9fdcd4;
-  --color-accent-default: #63c4b8;
-  --color-accent-strong: #0b6b64;
-  --color-accent-surface: #062b29;
+  --color-accent-primary: #72dccb;
+  --color-accent-default: #16877d;
+  --color-accent-strong: #075f59;
+  --color-accent-surface: #c3ebe8;
+  --color-accent-neon: #65efd7;
+  --color-accent-neon-blue: #67cfee;
 
-  --color-border-default: rgba(211, 216, 216, 0.16);
-  --color-border-strong: rgba(159, 220, 212, 0.4);
-  --color-border-selected: #9fdcd4;
-  --color-focus: #63c4b8;
+  --color-border-default: rgba(32, 91, 101, 0.16);
+  --color-border-strong: rgba(22, 135, 125, 0.32);
+  --color-border-selected: #16877d;
+  --color-focus: #08776f;
 
-  --color-status-success: #56d69b;
-  --color-status-warning: #f5b942;
-  --color-status-danger: #e45b5b;
+  --color-status-success: #16865b;
+  --color-status-warning: #a66b00;
+  --color-status-danger: #c94747;
 
   --space-1: 4px;
   --space-2: 8px;
@@ -52,6 +54,8 @@
   --ease-emphasis: cubic-bezier(.2, .9, .2, 1);
 
   --font-sans: "Pretendard Variable", Pretendard, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-  --shadow-raised: 0 16px 48px rgba(0, 0, 0, 0.36);
-  --glow-accent: 0 0 32px rgba(99, 196, 184, 0.24);
+  --shadow-raised: 0 16px 48px rgba(37, 87, 96, 0.18);
+  --glow-accent: 0 0 28px rgba(22, 135, 125, 0.24);
+  --glow-cta: 0 0 0 1px rgba(22, 135, 125, 0.28), 0 8px 24px rgba(47, 175, 165, 0.24), 0 0 36px rgba(103, 207, 238, 0.18);
+  --glow-cta-hover: 0 0 0 1px rgba(7, 95, 89, 0.34), 0 10px 28px rgba(47, 175, 165, 0.34), 0 0 48px rgba(103, 207, 238, 0.26);
 }

@@ -70,7 +70,7 @@ describe("recipient page", () => {
     await user.click(screen.getByRole("button", { name: "사진 저장하기" }));
 
     expect(savePhoto).toHaveBeenCalledWith(expect.any(Blob), "umc-photo-booth.jpg");
-    expect(screen.getByRole("link", { name: "지원 페이지 보기" })).toHaveAttribute(
+    expect(screen.getByRole("link", { name: "지원 페이지 바로가기" })).toHaveAttribute(
       "href",
       "https://join.example.test/apply",
     );
