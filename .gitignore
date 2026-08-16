@@ -5,4 +5,5 @@ dist/
 runtime-data/
 playwright-report/
 test-results/
-.env
+.env*
+.vercel/

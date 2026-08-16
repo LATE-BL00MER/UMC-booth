@@ -19,6 +19,7 @@ export interface RecipientDependencies {
   location: URL;
   revokeObjectURL: (url: string) => void;
   savePhoto: typeof savePhoto;
+  storage: Pick<Storage, "getItem" | "setItem">;
 }
 
 interface RecipientPageLifecycle {
@@ -41,6 +42,7 @@ const defaultDependencies: RecipientDependencies = {
   location: new URL(window.location.href),
   revokeObjectURL: (url) => URL.revokeObjectURL(url),
   savePhoto,
+  storage: window.sessionStorage,
 };
 
 export async function bootstrapRecipientPage(
@@ -58,7 +60,12 @@ export async function bootstrapRecipientPage(
   }
 
   const token = tokenFromPath(dependencies.location.pathname);
-  const keyFragment = keyFromHash(dependencies.location.hash);
+  const suppliedKeyFragment = keyFromHash(dependencies.location.hash);
+  if (token && suppliedKeyFragment) {
+    retainKeyFragment(dependencies.storage, token, suppliedKeyFragment);
+  }
+  const keyFragment = suppliedKeyFragment
+    ?? (token ? retainedKeyFragment(dependencies.storage, token) : null);
   if (!token || !keyFragment) {
     renderMessage(root, lifecycle, "사진을 열 수 없습니다");
     return teardown;
@@ -266,6 +273,33 @@ function keyFromHash(hash: string): string | null {
   const parameters = new URLSearchParams(hash.startsWith("#") ? hash.slice(1) : hash);
   const keys = parameters.getAll("key");
   return keys.length === 1 && keys[0] ? keys[0] : null;
+}
+
+function retainedKeyFragment(
+  storage: Pick<Storage, "getItem">,
+  token: string,
+): string | null {
+  try {
+    return storage.getItem(keyStorageName(token))?.trim() || null;
+  } catch {
+    return null;
+  }
+}
+
+function retainKeyFragment(
+  storage: Pick<Storage, "setItem">,
+  token: string,
+  keyFragment: string,
+): void {
+  try {
+    storage.setItem(keyStorageName(token), keyFragment);
+  } catch {
+    // Some privacy modes disable session storage. The in-memory fragment still works.
+  }
+}
+
+function keyStorageName(token: string): string {
+  return `umc-photo-booth-photo-key:${token}`;
 }
 
 function httpsUrl(value: unknown): string | null {

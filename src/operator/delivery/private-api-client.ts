@@ -10,14 +10,17 @@ export type ActivationResolution =
   | { status: "deleted" };
 
 export class FetchPrivateApiClient implements PrivateApiClient {
-  constructor(private readonly fetchFn: typeof fetch = fetch.bind(globalThis)) {}
+  constructor(
+    private readonly fetchFn: typeof fetch = fetch.bind(globalThis),
+    private readonly operatorKey: string | null = null,
+  ) {}
 
   async createPending(ciphertext: Uint8Array, signal: AbortSignal): Promise<{ id: string }> {
     const body = new ArrayBuffer(ciphertext.byteLength);
     new Uint8Array(body).set(ciphertext);
     const response = await this.fetchFn("/api/sessions", {
       method: "POST",
-      headers: { "content-type": "application/octet-stream" },
+      headers: this.headers({ "content-type": "application/octet-stream" }),
       body,
       signal,
     });
@@ -29,6 +32,7 @@ export class FetchPrivateApiClient implements PrivateApiClient {
   async activate(id: string, signal: AbortSignal): Promise<{ publicToken: string; expiresAt: number }> {
     const response = await this.fetchFn(`/api/sessions/${encodeURIComponent(id)}/activate`, {
       method: "POST",
+      headers: this.headers(),
       signal,
     });
     return readJson(response, ["publicToken", "expiresAt"], (value): value is { publicToken: string; expiresAt: number } =>
@@ -37,7 +41,10 @@ export class FetchPrivateApiClient implements PrivateApiClient {
   }
 
   async resolveActivationOrDelete(id: string): Promise<ActivationResolution> {
-    const response = await this.fetchFn(`/api/sessions/${encodeURIComponent(id)}/resolve`, { method: "POST" });
+    const response = await this.fetchFn(`/api/sessions/${encodeURIComponent(id)}/resolve`, {
+      method: "POST",
+      headers: this.headers(),
+    });
     return readJson(response, "status", (value): value is ActivationResolution =>
       isRecord(value)
       && (
@@ -48,8 +55,15 @@ export class FetchPrivateApiClient implements PrivateApiClient {
   }
 
   async deletePending(id: string): Promise<void> {
-    const response = await this.fetchFn(`/api/sessions/${encodeURIComponent(id)}`, { method: "DELETE" });
+    const response = await this.fetchFn(`/api/sessions/${encodeURIComponent(id)}`, {
+      method: "DELETE",
+      headers: this.headers(),
+    });
     if (!response.ok) throw new Error(`Private API request failed (${response.status})`);
+  }
+
+  private headers(base: Record<string, string> = {}): Record<string, string> {
+    return this.operatorKey ? { ...base, "x-operator-key": this.operatorKey } : base;
   }
 }
 

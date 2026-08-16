@@ -19,6 +19,7 @@ if (!root) {
 }
 
 const applicationRoot = createRoot(root);
+const operatorKey = readOperatorKey();
 
 applicationRoot.render(
   <BootstrapShell
@@ -31,9 +32,9 @@ async function loadBrowserServices(): Promise<AppServices> {
   const [frames, prompts, runtimeConfig] = await Promise.all([
     loadOperatorFrames(),
     loadOperatorPrompts(),
-    loadOperatorRuntimeConfig(),
+    loadOperatorRuntimeConfig(operatorKey),
   ]);
-  return createBrowserServices(frames, prompts, runtimeConfig);
+  return createBrowserServices(frames, prompts, runtimeConfig, operatorKey);
 }
 
 async function loadOperatorFrames() {
@@ -50,8 +51,8 @@ async function loadOperatorPrompts(): Promise<[string, string, string, string, s
   return prompts as [string, string, string, string, string, string];
 }
 
-async function loadOperatorRuntimeConfig(): Promise<{ countdownTickMs: number; exposeDeliveryUrl: boolean }> {
-  const response = await fetch("/api/operator-config");
+async function loadOperatorRuntimeConfig(operatorKey: string | null): Promise<{ countdownTickMs: number; exposeDeliveryUrl: boolean }> {
+  const response = await fetch("/api/operator-config", { headers: operatorHeaders(operatorKey) });
   if (!response.ok) throw new Error("Could not load operator runtime config");
   const value: unknown = await response.json();
   if (!isRecord(value) || !isPositiveInteger(value.countdownTickMs) || typeof value.exposeDeliveryUrl !== "boolean") {
@@ -64,9 +65,11 @@ function createBrowserServices(
   frames: Awaited<ReturnType<typeof loadOperatorFrames>>,
   prompts: [string, string, string, string, string, string],
   runtimeConfig: { countdownTickMs: number; exposeDeliveryUrl: boolean },
+  operatorKey: string | null,
 ): AppServices {
   const registry = new MemoryIssuedSessionRegistry();
-  const api = new FetchPrivateApiClient();
+  const api = new FetchPrivateApiClient(fetch.bind(globalThis), operatorKey);
+  let lastCleanupRequestAt = 0;
 
   return {
     camera: new BrowserCameraPort(getCaptureAspectRatio(frames)),
@@ -83,8 +86,14 @@ function createBrowserServices(
     getPublicUrl: () => null,
     preflight: {
       readStatus: async (signal) => {
-        const response = await fetch("/api/status", { signal });
+        const now = Date.now();
+        const requestCleanup = now - lastCleanupRequestAt >= 30_000;
+        const response = await fetch(`/api/status${requestCleanup ? "?cleanup=1" : ""}`, {
+          signal,
+          headers: operatorHeaders(operatorKey),
+        });
         if (!response.ok) throw new Error("Could not read runtime status");
+        if (requestCleanup) lastCleanupRequestAt = now;
         const status = parseRuntimeStatus(await response.json());
         return {
           tunnel: {
@@ -103,7 +112,7 @@ function createBrowserServices(
       async record(event) {
         const response = await fetch("/api/metrics", {
           method: "POST",
-          headers: { "content-type": "application/json" },
+          ...operatorRequestHeaders(operatorKey),
           body: JSON.stringify({ event }),
           credentials: "same-origin",
         });
@@ -167,4 +176,31 @@ function isNonNegativeInteger(value: unknown): value is number {
 
 function isPositiveInteger(value: unknown): value is number {
   return typeof value === "number" && Number.isSafeInteger(value) && value > 0;
+}
+
+function readOperatorKey(): string | null {
+  const storageKey = "umc-photo-booth-operator-key";
+  const parameters = new URLSearchParams(window.location.hash.startsWith("#") ? window.location.hash.slice(1) : "");
+  const supplied = parameters.get("operator")?.trim() || null;
+  try {
+    if (supplied) window.sessionStorage.setItem(storageKey, supplied);
+    const retained = supplied ?? window.sessionStorage.getItem(storageKey)?.trim() ?? null;
+    if (supplied) window.history.replaceState(null, "", `${window.location.pathname}${window.location.search}`);
+    return retained || null;
+  } catch {
+    return supplied;
+  }
+}
+
+function operatorHeaders(key: string | null): Record<string, string> {
+  return key ? { "x-operator-key": key } : {};
+}
+
+function operatorRequestHeaders(key: string | null): Pick<RequestInit, "headers"> {
+  return {
+    headers: {
+      "content-type": "application/json",
+      ...operatorHeaders(key),
+    },
+  };
 }

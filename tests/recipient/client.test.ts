@@ -37,6 +37,40 @@ describe("recipient page", () => {
     expect(screen.getByAltText("완성된 네컷 사진")).toBeVisible();
   });
 
+  it("recovers the fragment key when the mobile browser reloads the QR page", async () => {
+    const key = await generatePhotoKey();
+    const ciphertext = await encryptPhoto(new Uint8Array(await savedBlob.arrayBuffer()), key);
+    const responseBytes = new Uint8Array(ciphertext.byteLength);
+    responseBytes.set(ciphertext);
+    const retained = new Map<string, string>();
+    const storage = {
+      getItem: (name: string) => retained.get(name) ?? null,
+      setItem: (name: string, value: string) => { retained.set(name, value); },
+    };
+    const dependencies = {
+      decryptPhoto,
+      fetch: vi.fn<typeof fetch>()
+        .mockImplementation(async () => new Response(responseBytes.buffer.slice(0))),
+      importKeyFragment: async () => key,
+      joinSiteUrl: "https://join.example.test/apply",
+      savePhoto: vi.fn(),
+      createObjectURL: () => "blob:photo-preview",
+      storage,
+    };
+
+    await bootstrapRecipientPage(document, {
+      ...dependencies,
+      location: new URL("https://booth.test/d/reload-token#key=retained-fragment"),
+    });
+    await bootstrapRecipientPage(document, {
+      ...dependencies,
+      location: new URL("https://booth.test/d/reload-token"),
+    });
+
+    expect(retained.get("umc-photo-booth-photo-key:reload-token")).toBe("retained-fragment");
+    expect(screen.getByAltText("완성된 네컷 사진")).toBeVisible();
+  });
+
   it("fetches ciphertext without sending the key and reveals the CTA after save intent", async () => {
     const key = await generatePhotoKey();
     const ciphertext = await encryptPhoto(new Uint8Array(await savedBlob.arrayBuffer()), key);
