@@ -126,10 +126,13 @@ async function encryptedFile(request: Request, token: string | null): Promise<Re
   const lookup = await store.readActive(token);
   if (lookup.kind === "gone") return safeError(410);
   if (lookup.kind !== "active") return safeError(404);
-  return new Response(lookup.stream, {
+  return encryptedStreamResponse(lookup.stream);
+}
+
+export function encryptedStreamResponse(stream: ReadableStream<Uint8Array>): Response {
+  return new Response(stream, {
     headers: {
       ...privacyHeaders(),
-      "content-length": String(lookup.size),
       "content-type": "application/octet-stream",
     },
   });
