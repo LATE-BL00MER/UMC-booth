@@ -266,28 +266,10 @@
 
 .capture-progress,
 .capture-countdown,
-.capture-prompt,
 .capture-guidance {
   position: absolute;
   z-index: 1;
   margin: 0;
-}
-
-.capture-prompt {
-  top: 32px;
-  left: 50%;
-  max-width: min(560px, calc(100vw - 240px));
-  padding: 10px 18px;
-  border: 1px solid rgba(255, 255, 255, .14);
-  border-radius: var(--radius-pill);
-  overflow: hidden;
-  background: rgba(0, 0, 0, .55);
-  color: white;
-  font-size: 18px;
-  font-weight: 700;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  transform: translateX(-50%);
 }
 
 .capture-progress {

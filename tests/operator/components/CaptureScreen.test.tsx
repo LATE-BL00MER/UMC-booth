@@ -32,7 +32,7 @@ class PreviewCamera implements CameraPort {
 }
 
 describe("CaptureScreen", () => {
-  it("shows the live preview, first prompt, progress, and initial countdown without local navigation", async () => {
+  it("shows the live preview, progress, and initial countdown without a pose prompt or local navigation", async () => {
     const camera = new PreviewCamera();
     const controller = new AbortController();
 
@@ -49,9 +49,9 @@ describe("CaptureScreen", () => {
       />,
     );
 
-    expect(await screen.findByText("pose 1")).toBeVisible();
+    expect(await screen.findByText("5")).toBeVisible();
+    expect(screen.queryByText("pose 1")).not.toBeInTheDocument();
     expect(screen.getByText("1 / 6")).toBeVisible();
-    expect(screen.getByText("5")).toBeVisible();
     expect(screen.getByLabelText("카메라 미리보기")).toBe(camera.video);
     expect(document.querySelector(".capture-viewport")).toHaveStyle({ "--capture-aspect-ratio": String(7 / 9) });
     expect(screen.queryByRole("button")).not.toBeInTheDocument();

@@ -133,7 +133,6 @@ export function CaptureScreen({
         />
         <div className="capture-overlay" aria-hidden="true" />
       </div>
-      <p className="capture-prompt" aria-live="polite">{prompts[shotIndex]}</p>
       <p className="capture-progress" aria-live="polite">{shotIndex + 1} / 6</p>
       <output className="capture-countdown" aria-live="assertive">{countdown ?? ""}</output>
       <p className="capture-guidance">테두리 안에 모두 들어오도록 위치해 주세요</p>
