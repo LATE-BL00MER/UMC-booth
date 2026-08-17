@@ -7,6 +7,7 @@ import {
   runCaptureSequence,
   type CaptureSequenceOptions,
 } from "../camera/capture-sequence.js";
+import { playShutterSound, prepareShutterSound } from "../camera/shutter-sound.js";
 
 type PosePrompts = [string, string, string, string, string, string];
 
@@ -17,7 +18,9 @@ export interface CaptureScreenProps {
   generation: number;
   signal: AbortSignal;
   tickMs: number;
+  postCaptureDelayMs?: number;
   sleep?: CaptureSequenceOptions["sleep"];
+  playCaptureSound?: () => void;
   onPhotoCaptured(photo: CapturedPhoto, generation: number): void;
   onRetry?(shotIndex: number): void;
   onError?(error: unknown): void;
@@ -30,15 +33,19 @@ export function CaptureScreen({
   generation,
   signal,
   tickMs,
+  postCaptureDelayMs = 1_500,
   sleep = abortableSleep,
+  playCaptureSound = playShutterSound,
   onPhotoCaptured,
   onRetry,
   onError,
 }: CaptureScreenProps) {
   const videoRef = useRef<HTMLVideoElement>(null);
+  const pulseTimeoutRef = useRef<number | null>(null);
   const callbacksRef = useRef({ onPhotoCaptured, onRetry, onError });
   const [shotIndex, setShotIndex] = useState(0);
   const [countdown, setCountdown] = useState<5 | 4 | 3 | 2 | 1 | null>(null);
+  const [isCapturePulsing, setIsCapturePulsing] = useState(false);
   const captureViewportStyle = {
     "--capture-aspect-ratio": captureAspectRatio,
   } as CSSProperties;
@@ -56,6 +63,7 @@ export function CaptureScreen({
         const video = videoRef.current;
         if (!video || screenAbortController.signal.aborted) return;
 
+        prepareShutterSound();
         await camera.start(video);
         if (screenAbortController.signal.aborted) return;
 
@@ -64,10 +72,25 @@ export function CaptureScreen({
           prompts,
           signal: screenAbortController.signal,
           tickMs,
+          postCaptureDelayMs,
           sleep,
           onCountdown: (value, nextShotIndex) => {
             setShotIndex(nextShotIndex);
             setCountdown(value);
+          },
+          onCaptureFeedback: () => {
+            setCountdown(null);
+            try {
+              playCaptureSound();
+            } catch {
+              // Audio feedback must never interrupt or retry a successful camera capture.
+            }
+            setIsCapturePulsing(true);
+            if (pulseTimeoutRef.current !== null) window.clearTimeout(pulseTimeoutRef.current);
+            pulseTimeoutRef.current = window.setTimeout(() => {
+              setIsCapturePulsing(false);
+              pulseTimeoutRef.current = null;
+            }, 360);
           },
           onCaptured: (blob, capturedShotIndex) => {
             const previewUrl = URL.createObjectURL(blob);
@@ -92,13 +115,14 @@ export function CaptureScreen({
     return () => {
       screenAbortController.abort();
       signal.removeEventListener("abort", abortScreen);
+      if (pulseTimeoutRef.current !== null) window.clearTimeout(pulseTimeoutRef.current);
       camera.stop();
     };
-  }, [camera, generation, prompts, signal, sleep, tickMs]);
+  }, [camera, generation, playCaptureSound, postCaptureDelayMs, prompts, signal, sleep, tickMs]);
 
   return (
     <section className="capture-screen" aria-label="사진 촬영">
-      <div className="capture-viewport" style={captureViewportStyle}>
+      <div className="capture-viewport" style={captureViewportStyle} data-capture-pulse={isCapturePulsing}>
         <video
           className="capture-video"
           ref={videoRef}

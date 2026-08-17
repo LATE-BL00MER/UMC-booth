@@ -102,6 +102,7 @@ function createFakeServices(): AppServices {
     frames: [frame],
     prompts,
     countdownTickMs: 1,
+    postCaptureDelayMs: 0,
     getPublicUrl: () => "https://booth.example",
     preflight: {
       readStatus: async () => readyStatus,
