@@ -1,5 +1,5 @@
-import { render, screen } from "@testing-library/react";
-import { describe, expect, it } from "vitest";
+import { render, screen, waitFor } from "@testing-library/react";
+import { describe, expect, it, vi } from "vitest";
 
 import type { CameraPort } from "../../../src/operator/camera/camera-port.js";
 import { CaptureScreen } from "../../../src/operator/components/CaptureScreen.js";
@@ -57,5 +57,39 @@ describe("CaptureScreen", () => {
     expect(screen.queryByRole("button")).not.toBeInTheDocument();
 
     controller.abort();
+  });
+
+  it("plays the shutter sound and pulses the frame as soon as a photo is taken", async () => {
+    const playCaptureSound = vi.fn();
+    let releaseCountdown: (() => void) | undefined;
+    let sleepCount = 0;
+    const sleep = vi.fn(() => {
+      sleepCount += 1;
+      if (sleepCount < 5) return Promise.resolve();
+      if (sleepCount === 5) return Promise.resolve();
+      return new Promise<void>((resolve) => {
+        releaseCountdown = resolve;
+      });
+    });
+
+    const { unmount } = render(
+      <CaptureScreen
+        camera={new PreviewCamera()}
+        captureAspectRatio={7 / 9}
+        prompts={prompts}
+        generation={1}
+        signal={new AbortController().signal}
+        tickMs={10}
+        sleep={sleep}
+        playCaptureSound={playCaptureSound}
+        onPhotoCaptured={() => undefined}
+      />,
+    );
+
+    await waitFor(() => expect(playCaptureSound).toHaveBeenCalledOnce());
+    expect(document.querySelector(".capture-viewport")).toHaveAttribute("data-capture-pulse", "true");
+
+    unmount();
+    releaseCountdown?.();
   });
 });

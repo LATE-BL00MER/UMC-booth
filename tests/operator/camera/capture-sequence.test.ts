@@ -42,6 +42,7 @@ function baseOptions(camera: CameraPort): CaptureSequenceOptions {
     prompts,
     signal: new AbortController().signal,
     tickMs: 10,
+    postCaptureDelayMs: 1_500,
     sleep: async () => undefined,
     onCountdown: () => undefined,
     onCaptured: () => undefined,
@@ -69,6 +70,22 @@ describe("runCaptureSequence", () => {
       [0, 1],
     ]);
     expect(captures).toEqual([0, 1, 2, 3, 4, 5]);
+  });
+
+  it("waits 1.5 seconds after capture feedback before publishing each photo", async () => {
+    const events: string[] = [];
+
+    await runCaptureSequence({
+      ...baseOptions(new RecordingCamera()),
+      sleep: async (ms) => {
+        if (ms === 1_500) events.push("pause");
+      },
+      onCaptureFeedback: (shot) => events.push(`feedback-${shot}`),
+      onCaptured: (_photo, shot) => events.push(`captured-${shot}`),
+    });
+
+    expect(events.slice(0, 3)).toEqual(["feedback-0", "pause", "captured-0"]);
+    expect(events.filter((event) => event === "pause")).toHaveLength(6);
   });
 
   it("repeats only the failed shot", async () => {
