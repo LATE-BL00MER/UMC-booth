@@ -56,6 +56,7 @@ export interface AppServices {
   prompts: [string, string, string, string, string, string];
   countdownTickMs: number;
   postCaptureDelayMs?: number;
+  playCaptureSound?: () => void;
   exposeDeliveryUrl?: boolean;
   getPublicUrl(): string | null;
   preflight: PreflightPort;
@@ -418,6 +419,7 @@ function renderPhase({
           signal={controller.signal}
           tickMs={services.countdownTickMs}
           postCaptureDelayMs={services.postCaptureDelayMs}
+          playCaptureSound={services.playCaptureSound}
           onPhotoCaptured={(photo, generation) => dispatch({ type: "PHOTO_CAPTURED", generation, photo })}
           onError={() => dispatch({ type: "CAPTURE_FAILED", generation: state.generation, message: "사진을 촬영하지 못했습니다" })}
         />
