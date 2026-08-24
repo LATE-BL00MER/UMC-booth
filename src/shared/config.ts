@@ -24,7 +24,7 @@ const schema = z.object({
   JOIN_SITE_URL: z
     .string()
     .url()
-    .default("https://university.neordinary.com/about"),
+    .default("https://forms.gle/nMDuKHj6rGt8stiH8"),
   PRIVATE_PORT: z.coerce.number().int().min(1024).max(65_535).default(4173),
   PUBLIC_PORT: z.coerce.number().int().min(1024).max(65_535).default(4174),
   SESSION_DIR: z.string().min(1).default("runtime-data/sessions"),

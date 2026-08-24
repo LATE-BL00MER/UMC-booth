@@ -233,7 +233,7 @@ function loadRecipientHtml(): string {
     recipientTemplate = readFileSync(resolve(process.cwd(), "dist/recipient/index.html"), "utf8");
   }
   const joinSiteUrl = validJoinSiteUrl(process.env.JOIN_SITE_URL)
-    ?? "https://university.neordinary.com/about";
+    ?? "https://forms.gle/nMDuKHj6rGt8stiH8";
   const serialized = JSON.stringify(joinSiteUrl).replaceAll("<", "\\u003c");
   return recipientTemplate.replace(
     "__JOIN_CONFIG_SCRIPT__",

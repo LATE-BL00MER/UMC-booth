@@ -17,7 +17,7 @@ describe("loadConfig", () => {
     const { JOIN_SITE_URL: _joinSiteUrl, ...envWithoutJoinSite } = validEnv;
 
     expect(loadConfig(envWithoutJoinSite).joinSiteUrl).toBe(
-      "https://university.neordinary.com/about",
+      "https://forms.gle/nMDuKHj6rGt8stiH8",
     );
   });
 

@@ -10,7 +10,7 @@ npm ci
 brew install cloudflared
 ```
 
-The booth uses the committed UMC application page at `https://university.neordinary.com/about` as its join destination:
+The booth uses the committed UMC application form at `https://forms.gle/nMDuKHj6rGt8stiH8` as its join destination:
 
 ```bash
 npm run booth
