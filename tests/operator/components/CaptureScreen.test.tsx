@@ -49,7 +49,7 @@ describe("CaptureScreen", () => {
       />,
     );
 
-    expect(await screen.findByText("5")).toBeVisible();
+    expect(await screen.findByText("3")).toBeVisible();
     expect(screen.queryByText("pose 1")).not.toBeInTheDocument();
     expect(screen.getByText("1 / 6")).toBeVisible();
     expect(screen.getByLabelText("카메라 미리보기")).toBe(camera.video);
@@ -65,8 +65,7 @@ describe("CaptureScreen", () => {
     let sleepCount = 0;
     const sleep = vi.fn(() => {
       sleepCount += 1;
-      if (sleepCount < 5) return Promise.resolve();
-      if (sleepCount === 5) return Promise.resolve();
+      if (sleepCount <= 4) return Promise.resolve();
       return new Promise<void>((resolve) => {
         releaseCountdown = resolve;
       });

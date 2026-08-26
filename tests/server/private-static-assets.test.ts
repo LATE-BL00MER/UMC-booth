@@ -26,7 +26,7 @@ async function createAppWithAssets(relativeAssetPaths = false, operatorEntry = "
     framePackDir: relativeAssetPaths ? relative(process.cwd(), framePackDir) : framePackDir,
     poseConfigPath: relativeAssetPaths ? relative(process.cwd(), poseConfigPath) : poseConfigPath,
     tunnelMode: "local", localPublicBaseUrl: "http://127.0.0.1:4174",
-    countdownSeconds: 5, captureCount: 6, selectedCount: 4, activeTtlMs: 600_000, pendingTtlMs: 120_000, sweepIntervalMs: 30_000, countdownTickMs: 1_000,
+    countdownSeconds: 3, captureCount: 6, selectedCount: 4, activeTtlMs: 600_000, pendingTtlMs: 120_000, sweepIntervalMs: 30_000, countdownTickMs: 1_000,
   };
   const runtimeStatus: RuntimeStatusProvider = { getStatus: async () => ({ tunnel: "starting", publicUrl: null, publicLatencyMs: null, lastSweepAt: null, pendingSessions: 0, activeSessions: 0, encryptedBytes: 0, acceptingCaptures: false }), requestShutdown: async () => undefined };
   const app = buildPrivateServer({ store, config, runtimeStatus, operatorBuildDir });

@@ -1,3 +1,7 @@
+import {
+  captureCountdownValues,
+  type CaptureCountdownValue,
+} from "../../shared/capture-policy.js";
 import type { CameraPort } from "./camera-port.js";
 
 export interface CaptureSequenceOptions {
@@ -7,7 +11,7 @@ export interface CaptureSequenceOptions {
   tickMs: number;
   postCaptureDelayMs: number;
   sleep(ms: number, signal: AbortSignal): Promise<void>;
-  onCountdown(value: 5 | 4 | 3 | 2 | 1, shotIndex: number): void;
+  onCountdown(value: CaptureCountdownValue, shotIndex: number): void;
   onCaptureFeedback?(shotIndex: number): void;
   onCaptured(photo: Blob, shotIndex: number): void;
   onRetry(shotIndex: number): void;
@@ -16,7 +20,7 @@ export interface CaptureSequenceOptions {
 export async function runCaptureSequence(options: CaptureSequenceOptions): Promise<void> {
   for (let shotIndex = 0; shotIndex < options.prompts.length; shotIndex += 1) {
     while (!options.signal.aborted) {
-      for (const value of [5, 4, 3, 2, 1] as const) {
+      for (const value of captureCountdownValues) {
         if (options.signal.aborted) return;
         options.onCountdown(value, shotIndex);
         try {

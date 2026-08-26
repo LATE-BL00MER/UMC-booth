@@ -20,7 +20,7 @@ function config(overrides: Partial<AppConfig> = {}): AppConfig {
     poseConfigPath: "/tmp/umc-runtime-poses.json",
     tunnelMode: "quick",
     localPublicBaseUrl: null,
-    countdownSeconds: 5,
+    countdownSeconds: 3,
     captureCount: 6,
     selectedCount: 4,
     activeTtlMs: 600_000,

@@ -51,7 +51,7 @@ function baseOptions(camera: CameraPort): CaptureSequenceOptions {
 }
 
 describe("runCaptureSequence", () => {
-  it("counts five to one before each of six successful captures", async () => {
+  it("counts three to one before each of six successful captures", async () => {
     const countdowns: Array<[number, number]> = [];
     const captures: number[] = [];
 
@@ -61,10 +61,8 @@ describe("runCaptureSequence", () => {
       onCaptured: (_blob, shot) => captures.push(shot),
     });
 
-    expect(countdowns).toHaveLength(30);
-    expect(countdowns.slice(0, 5)).toEqual([
-      [0, 5],
-      [0, 4],
+    expect(countdowns).toHaveLength(18);
+    expect(countdowns.slice(0, 3)).toEqual([
       [0, 3],
       [0, 2],
       [0, 1],
@@ -116,7 +114,7 @@ describe("runCaptureSequence", () => {
       onCaptured: (_photo, shot) => captures.push(shot),
     });
 
-    expect(countdowns).toEqual([5]);
+    expect(countdowns).toEqual([3]);
     expect(captures).toEqual([]);
   });
 

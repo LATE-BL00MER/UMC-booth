@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, type CSSProperties } from "react";
 
+import type { CaptureCountdownValue } from "../../shared/capture-policy.js";
 import type { CapturedPhoto } from "../booth-machine.js";
 import type { CameraPort } from "../camera/camera-port.js";
 import {
@@ -44,7 +45,7 @@ export function CaptureScreen({
   const pulseTimeoutRef = useRef<number | null>(null);
   const callbacksRef = useRef({ onPhotoCaptured, onRetry, onError });
   const [shotIndex, setShotIndex] = useState(0);
-  const [countdown, setCountdown] = useState<5 | 4 | 3 | 2 | 1 | null>(null);
+  const [countdown, setCountdown] = useState<CaptureCountdownValue | null>(null);
   const [isCapturePulsing, setIsCapturePulsing] = useState(false);
   const captureViewportStyle = {
     "--capture-aspect-ratio": captureAspectRatio,

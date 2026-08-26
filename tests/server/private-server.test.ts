@@ -44,7 +44,7 @@ async function createPrivateApp() {
     poseConfigPath: join(root, "poses.json"),
     tunnelMode: "local",
     localPublicBaseUrl: "http://127.0.0.1:4174",
-    countdownSeconds: 5,
+    countdownSeconds: 3,
     captureCount: 6,
     selectedCount: 4,
     activeTtlMs: 600_000,

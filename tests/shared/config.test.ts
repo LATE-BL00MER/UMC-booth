@@ -25,7 +25,7 @@ describe("loadConfig", () => {
     expect(loadConfig(validEnv)).toMatchObject({
       privatePort: 4173,
       publicPort: 4174,
-      countdownSeconds: 5,
+      countdownSeconds: 3,
       captureCount: 6,
       selectedCount: 4,
       tunnelMode: "quick",

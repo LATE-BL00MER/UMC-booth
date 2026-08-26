@@ -1,5 +1,6 @@
 import { z } from "zod";
 
+import { captureCountdownSeconds } from "./capture-policy.js";
 import { activeSessionTtlMs } from "./session-policy.js";
 
 export interface AppConfig {
@@ -12,7 +13,7 @@ export interface AppConfig {
   poseConfigPath: string;
   tunnelMode: "quick" | "local";
   localPublicBaseUrl: string | null;
-  countdownSeconds: 5;
+  countdownSeconds: typeof captureCountdownSeconds;
   captureCount: 6;
   selectedCount: 4;
   activeTtlMs: number;
@@ -65,7 +66,7 @@ export function loadConfig(env: NodeJS.ProcessEnv): AppConfig {
     poseConfigPath: parsed.POSE_CONFIG_PATH,
     tunnelMode: parsed.TUNNEL_MODE,
     localPublicBaseUrl: parsed.LOCAL_PUBLIC_BASE_URL ?? null,
-    countdownSeconds: 5,
+    countdownSeconds: captureCountdownSeconds,
     captureCount: 6,
     selectedCount: 4,
     activeTtlMs: testOnly ? (parsed.ACTIVE_TTL_MS ?? activeSessionTtlMs) : activeSessionTtlMs,
