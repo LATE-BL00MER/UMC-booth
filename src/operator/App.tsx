@@ -142,7 +142,7 @@ export function App({ services }: { services: AppServices }) {
         applyRuntimeStatus(runtimeStatus);
         dispatch({ type: "PREFLIGHT_SUCCEEDED", generation });
       } else {
-        dispatch({ type: "PREFLIGHT_FAILED", generation, message: "운영 준비 상태를 확인할 수 없습니다" });
+        dispatch({ type: "PREFLIGHT_FAILED", generation, message: preflightFailureMessage(status) });
       }
     } catch {
       if (controller.signal.aborted || !mounted.current || currentAbortController.current !== controller) return;
@@ -461,26 +461,39 @@ function renderPhase({
       );
     case "qr":
       return state.issuedSession === null
-        ? <ErrorScreen onRetry={onRetry} />
+        ? <ErrorScreen message="QR을 표시하지 못했습니다" onRetry={onRetry} />
         : <QrScreen issued={state.issuedSession} exposeDeliveryUrl={services.exposeDeliveryUrl ?? false} />;
     case "error":
-      return <ErrorScreen onRetry={onRetry} />;
+      return <ErrorScreen message={state.errorMessage} onRetry={onRetry} />;
     default:
       return assertNever(state.phase);
   }
 }
 
-function ErrorScreen({ onRetry }: { onRetry(): void }) {
+function ErrorScreen({ message, onRetry }: { message: string | null; onRetry(): void }) {
   return (
     <section className="error-screen" aria-label="오류">
       <div className="error-screen__panel glass-panel">
         <p className="eyebrow">PLEASE TRY AGAIN</p>
-        <h1 role="alert">사진을 준비하지 못했습니다</h1>
+        <h1 role="alert">{message ?? "사진을 준비하지 못했습니다"}</h1>
         <p>현재 단계부터 다시 시도할 수 있어요.</p>
         <button className="button button--primary" type="button" onClick={onRetry}>다시 시도</button>
       </div>
     </section>
   );
+}
+
+function preflightFailureMessage(status: PreflightStatus): string {
+  if (!status.cameraReady) {
+    return "카메라를 사용할 수 없습니다. 카메라를 사용하는 다른 탭이나 앱을 닫고 다시 시도해 주세요";
+  }
+  if (!status.acceptingCaptures || status.tunnel.state !== "healthy") {
+    return "사진 전달 서버에 연결할 수 없습니다. 잠시 후 다시 시도해 주세요";
+  }
+  if (!status.framePackValid) return "사진 프레임을 불러오지 못했습니다";
+  if (status.loadedPoseCount !== 6) return "촬영 설정을 불러오지 못했습니다";
+  if (!status.joinUrlConfigured) return "지원 페이지 주소를 확인할 수 없습니다";
+  return "운영 준비 상태를 확인할 수 없습니다";
 }
 
 function hasValidFramePack(frames: readonly FrameManifest[]): boolean {

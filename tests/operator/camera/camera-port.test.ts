@@ -24,6 +24,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  vi.useRealTimers();
   vi.restoreAllMocks();
   if (originalMediaDevices) {
     Object.defineProperty(navigator, "mediaDevices", originalMediaDevices);
@@ -96,6 +97,23 @@ describe("BrowserCameraPort", () => {
     await expect(new BrowserCameraPort().probe()).resolves.toBe(true);
 
     expect(tracks.map((track) => track.stop)).toEqual([expect.any(Function), expect.any(Function)]);
+    expect(tracks.every((track) => track.stop.mock.calls.length === 1)).toBe(true);
+  });
+
+  it("retries a camera that is still being released after a page reload", async () => {
+    vi.useFakeTimers();
+    const { stream, tracks } = createStream();
+    const getUserMedia = vi.fn()
+      .mockRejectedValueOnce(new DOMException("camera busy", "NotReadableError"))
+      .mockRejectedValueOnce(new DOMException("camera busy", "NotReadableError"))
+      .mockResolvedValueOnce(stream);
+    installMediaDevices(getUserMedia);
+
+    const probing = new BrowserCameraPort().probe();
+    await vi.runAllTimersAsync();
+
+    await expect(probing).resolves.toBe(true);
+    expect(getUserMedia).toHaveBeenCalledTimes(3);
     expect(tracks.every((track) => track.stop.mock.calls.length === 1)).toBe(true);
   });
 

@@ -291,11 +291,21 @@ describe("App", () => {
     };
     render(<App services={services} />);
 
-    expect(await screen.findByRole("alert")).toBeVisible();
+    expect(await screen.findByRole("alert")).toHaveTextContent("사진 전달 서버에 연결할 수 없습니다");
     expect(screen.getAllByRole("button").map((button) => button.textContent)).toEqual([
       "처음으로",
       "다시 시도",
     ]);
+  });
+
+  it("explains how to recover when the camera preflight fails", async () => {
+    const services = createFakeServices();
+    services.camera.probe = async () => false;
+    render(<App services={services} />);
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "카메라를 사용할 수 없습니다. 카메라를 사용하는 다른 탭이나 앱을 닫고 다시 시도해 주세요",
+    );
   });
 
   it("ignores preflight work from before reset", async () => {

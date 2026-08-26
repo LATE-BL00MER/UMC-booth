@@ -14,6 +14,9 @@ const cameraConstraints: MediaStreamConstraints = {
   audio: false,
 };
 
+const cameraProbeAttempts = 3;
+const cameraProbeRetryDelayMs = 250;
+
 export class BrowserCameraPort implements CameraPort {
   private stream: MediaStream | null = null;
   private video: HTMLVideoElement | null = null;
@@ -27,15 +30,24 @@ export class BrowserCameraPort implements CameraPort {
   }
 
   async probe(): Promise<boolean> {
-    let probeStream: MediaStream | null = null;
-    try {
-      probeStream = await navigator.mediaDevices.getUserMedia(cameraConstraints);
-      return probeStream.getVideoTracks().some((track) => track.readyState === "live");
-    } catch {
-      return false;
-    } finally {
-      stopTracks(probeStream);
+    for (let attempt = 0; attempt < cameraProbeAttempts; attempt += 1) {
+      let probeStream: MediaStream | null = null;
+      try {
+        probeStream = await navigator.mediaDevices.getUserMedia(cameraConstraints);
+        if (probeStream.getVideoTracks().some((track) => track.readyState === "live")) {
+          return true;
+        }
+      } catch {
+        // A camera stream from the page being reloaded can take a moment to
+        // release on Windows. Retry briefly before reporting a hardware issue.
+      } finally {
+        stopTracks(probeStream);
+      }
+      if (attempt + 1 < cameraProbeAttempts) {
+        await delay(cameraProbeRetryDelayMs);
+      }
     }
+    return false;
   }
 
   async start(video: HTMLVideoElement): Promise<void> {
@@ -164,6 +176,10 @@ export class BrowserCameraPort implements CameraPort {
       if (!this.isCurrentStart(generation)) cancel();
     });
   }
+}
+
+function delay(milliseconds: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, milliseconds));
 }
 
 function centeredCrop(width: number, height: number, targetAspectRatio: number | null) {
