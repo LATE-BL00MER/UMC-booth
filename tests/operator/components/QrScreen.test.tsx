@@ -38,6 +38,7 @@ describe("QrScreen", () => {
     expect(toDataURL).toHaveBeenCalledWith(issued.deliveryUrl, { errorCorrectionLevel: "M" });
     expect(screen.getByText("01:00")).toBeVisible();
     expect(screen.getByText("팀원 모두 각자 스캔할 수 있습니다")).toBeVisible();
+    expect(screen.getByText("QR은 10분 동안 이용할 수 있으며, 만료 후 암호화된 사진은 자동 삭제됩니다")).toBeVisible();
   });
 
   it("keeps the delivery URL out of the production QR screen", async () => {

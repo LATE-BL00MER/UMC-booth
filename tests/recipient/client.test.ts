@@ -134,6 +134,7 @@ describe("recipient page", () => {
     });
 
     expect(screen.getByText("사진이 자동 삭제되었습니다")).toBeVisible();
+    expect(screen.getByText("QR 발급 후 10분이 지나 사진 이용 시간이 만료됐습니다.")).toBeVisible();
   });
 
   it("rejects a non-HTTPS application link before rendering the photo", async () => {

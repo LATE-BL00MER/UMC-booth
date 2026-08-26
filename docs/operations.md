@@ -28,7 +28,7 @@ Confirm all of the following:
 - The selected frame pack is the approved event frame pack.
 - Local storage has enough free capacity for the operating system, build output, and temporary encrypted session data.
 - The front sign reads `친구와 무료 네컷 촬영 · 휴대폰으로 바로 저장`.
-- The front-sign subcopy reads `앱 설치 없음 · 사진은 10분 후 삭제`.
+- The front-sign subcopy reads `앱 설치 없음 · QR은 10분 후 만료`.
 
 ### Vercel-hosted event budget
 

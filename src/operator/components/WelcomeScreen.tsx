@@ -1,5 +1,6 @@
 import { useState } from "react";
 import type { IssuedSession } from "../../shared/contracts.js";
+import { activeSessionTtlMinutes } from "../../shared/session-policy.js";
 
 export interface WelcomeScreenProps {
   onStart(): void;
@@ -24,7 +25,9 @@ export function WelcomeScreen({ onStart, acceptingCaptures, issuedSessions = [],
       </div>
       <div className="welcome-side">
         <div className="welcome-consent glass-panel">
-          <p className="privacy-note">사진은 암호화되어 QR 발급 5분 후 삭제됩니다</p>
+          <p className="privacy-note">
+            QR은 발급 후 {activeSessionTtlMinutes}분 동안 이용할 수 있으며, 만료 후 암호화된 사진은 자동 삭제됩니다
+          </p>
           <label className="consent-control">
             <input
               type="checkbox"

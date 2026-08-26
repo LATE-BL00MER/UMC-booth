@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { toDataURL } from "qrcode";
 
 import type { IssuedSession } from "../../shared/contracts.js";
+import { activeSessionTtlMinutes } from "../../shared/session-policy.js";
 
 export interface QrScreenProps {
   issued: IssuedSession;
@@ -61,7 +62,9 @@ export function QrScreen({ issued, exposeDeliveryUrl = false }: QrScreenProps) {
       <output className="qr-timer" data-tone={timerTone(remaining)} aria-live="polite">
         {formatRemaining(remaining)}
       </output>
-      <p className="qr-privacy">사진은 5분 후 자동으로 삭제됩니다</p>
+      <p className="qr-privacy">
+        QR은 {activeSessionTtlMinutes}분 동안 이용할 수 있으며, 만료 후 암호화된 사진은 자동 삭제됩니다
+      </p>
     </section>
   );
 }

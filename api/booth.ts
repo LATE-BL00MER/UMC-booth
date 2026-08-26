@@ -7,13 +7,13 @@ import {
   CloudSessionConflictError,
   CloudSessionNotFoundError,
 } from "../src/vercel/blob-session-store.js";
+import { activeSessionTtlMs } from "../src/shared/session-policy.js";
 
-const activeTtlMs = 10 * 60 * 1_000;
 const pendingTtlMs = 2 * 60 * 1_000;
 const maxCiphertextBytes = 4_000_000;
 const operatorEvents = new Set(["team_start", "completed_qr"]);
 const recipientEvents = new Set(["decrypt_success", "save_intent", "join_click"]);
-const store = new BlobSessionStore({ activeTtlMs, pendingTtlMs });
+const store = new BlobSessionStore({ activeTtlMs: activeSessionTtlMs, pendingTtlMs });
 
 let recipientTemplate: string | null = null;
 
