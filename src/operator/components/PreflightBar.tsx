@@ -1,5 +1,7 @@
 import { useEffect } from "react";
 
+import { cloudCleanupIntervalMs } from "../cleanup-policy.js";
+
 export interface PreflightTunnelStatus {
   state: "starting" | "healthy" | "down";
   publicUrl: string | null;
@@ -24,7 +26,7 @@ export interface PreflightBarProps {
   onReadyChange?(ready: boolean): void;
 }
 
-const SWEEP_FRESHNESS_MS = 60_000;
+const SWEEP_FRESHNESS_MS = cloudCleanupIntervalMs + 60_000;
 
 export function getPreflightReadiness(status: PreflightStatus, now: number): boolean {
   return status.cameraReady &&

@@ -126,8 +126,8 @@ function createBrowserServices(
           headers: operatorHeaders(operatorKey),
         });
         if (!response.ok) throw new Error("Could not read runtime status");
-        if (requestCleanup) lastSuccessfulCleanupAt = now;
         const status = parseRuntimeStatus(await response.json());
+        if (requestCleanup) lastSuccessfulCleanupAt = Date.now();
         return {
           tunnel: {
             state: status.tunnel,
@@ -136,7 +136,10 @@ function createBrowserServices(
             error: null,
           },
           acceptingCaptures: status.acceptingCaptures,
-          lastSuccessfulSweepAt: status.lastSweepAt,
+          // Use the browser's clock for a successful cleanup request. Comparing a
+          // server timestamp with Date.now() can briefly make a fresh sweep look
+          // like it happened in the future when the two clocks differ.
+          lastSuccessfulSweepAt: lastSuccessfulCleanupAt ?? status.lastSweepAt,
           activeCiphertextCount: status.pendingSessions + status.activeSessions,
         };
       },

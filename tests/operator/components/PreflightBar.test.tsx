@@ -18,10 +18,12 @@ const readyStatus: PreflightStatus = {
   activeCiphertextCount: 2,
 };
 
+const checkedAt = 400_000;
+
 describe("PreflightBar", () => {
   it("renders only operational preflight information and exposes a ready state", () => {
     const onReadyChange = vi.fn();
-    render(<PreflightBar status={readyStatus} now={() => 100_000} onReadyChange={onReadyChange} />);
+    render(<PreflightBar status={readyStatus} now={() => checkedAt} onReadyChange={onReadyChange} />);
 
     expect(screen.getByLabelText("운영 준비 상태")).toHaveAttribute("data-ready", "true");
     expect(screen.getByText("카메라: 준비됨")).toBeVisible();
@@ -33,14 +35,14 @@ describe("PreflightBar", () => {
     expect(onReadyChange).toHaveBeenCalledWith(true);
   });
 
-  it("requires every readiness gate, including a sweep no older than sixty seconds", () => {
-    expect(getPreflightReadiness(readyStatus, 100_000)).toBe(true);
-    expect(getPreflightReadiness({ ...readyStatus, loadedPoseCount: 5 }, 100_000)).toBe(false);
-    expect(getPreflightReadiness({ ...readyStatus, lastSuccessfulSweepAt: 39_999 }, 100_000)).toBe(false);
-    expect(getPreflightReadiness({ ...readyStatus, tunnel: { ...readyStatus.tunnel, state: "down" } }, 100_000)).toBe(false);
-    expect(getPreflightReadiness({ ...readyStatus, acceptingCaptures: false }, 100_000)).toBe(false);
+  it("requires every readiness gate, including a sweep within the cleanup interval and grace period", () => {
+    expect(getPreflightReadiness(readyStatus, checkedAt)).toBe(true);
+    expect(getPreflightReadiness({ ...readyStatus, loadedPoseCount: 5 }, checkedAt)).toBe(false);
+    expect(getPreflightReadiness({ ...readyStatus, lastSuccessfulSweepAt: 39_999 }, checkedAt)).toBe(false);
+    expect(getPreflightReadiness({ ...readyStatus, tunnel: { ...readyStatus.tunnel, state: "down" } }, checkedAt)).toBe(false);
+    expect(getPreflightReadiness({ ...readyStatus, acceptingCaptures: false }, checkedAt)).toBe(false);
 
-    render(<PreflightBar status={{ ...readyStatus, joinUrlConfigured: false }} now={() => 100_000} />);
+    render(<PreflightBar status={{ ...readyStatus, joinUrlConfigured: false }} now={() => checkedAt} />);
     expect(screen.getByLabelText("운영 준비 상태")).toHaveAttribute("data-ready", "false");
   });
 });
