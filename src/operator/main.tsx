@@ -4,6 +4,7 @@ import "./styles/index.css";
 
 import { App, type AppServices, type RuntimePreflightStatus } from "./App.js";
 import { BrowserCameraPort } from "./camera/camera-port.js";
+import { isCloudCleanupDue } from "./cleanup-policy.js";
 import { BootstrapShell } from "./components/BootstrapShell.js";
 import { OperatorLogin } from "./components/OperatorLogin.js";
 import { MemoryIssuedSessionRegistry } from "./delivery/issued-session-registry.js";
@@ -101,7 +102,7 @@ function createBrowserServices(
 ): AppServices {
   const registry = new MemoryIssuedSessionRegistry();
   const api = new FetchPrivateApiClient(fetch.bind(globalThis), operatorKey);
-  let lastCleanupRequestAt = 0;
+  let lastSuccessfulCleanupAt: number | null = null;
 
   return {
     camera: new BrowserCameraPort(getCaptureAspectRatio(frames)),
@@ -119,13 +120,13 @@ function createBrowserServices(
     preflight: {
       readStatus: async (signal) => {
         const now = Date.now();
-        const requestCleanup = now - lastCleanupRequestAt >= 30_000;
+        const requestCleanup = isCloudCleanupDue(now, lastSuccessfulCleanupAt);
         const response = await fetch(`/api/status${requestCleanup ? "?cleanup=1" : ""}`, {
           signal,
           headers: operatorHeaders(operatorKey),
         });
         if (!response.ok) throw new Error("Could not read runtime status");
-        if (requestCleanup) lastCleanupRequestAt = now;
+        if (requestCleanup) lastSuccessfulCleanupAt = now;
         const status = parseRuntimeStatus(await response.json());
         return {
           tunnel: {

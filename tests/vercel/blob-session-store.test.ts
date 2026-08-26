@@ -7,6 +7,7 @@ import {
 
 class MemoryBlobStorage implements BlobStorageAdapter {
   readonly objects = new Map<string, { bytes: Uint8Array; uploadedAt: Date }>();
+  readonly listCalls: string[] = [];
 
   constructor(private readonly now: () => number) {}
 
@@ -48,6 +49,7 @@ class MemoryBlobStorage implements BlobStorageAdapter {
   }
 
   async list(prefix: string): Promise<{ blobs: Array<{ pathname: string; size: number; uploadedAt: Date }>; hasMore: boolean }> {
+    this.listCalls.push(prefix);
     return {
       blobs: [...this.objects.entries()]
         .filter(([pathname]) => pathname.startsWith(prefix))
@@ -87,10 +89,22 @@ describe("BlobSessionStore", () => {
     expect([...storage.objects.keys()]).toEqual([
       `umc-photo-booth/sessions/active/${pending.id}/${activated.expiresAt.toString(36)}.bin`,
     ]);
+    expect(storage.listCalls).toEqual([]);
 
     time.value = activated.expiresAt;
     expect(await store.readActive(activated.publicToken)).toEqual({ kind: "gone" });
     expect(storage.objects.size).toBe(0);
+  });
+
+  it("resolves an activation retry only after the pending object is gone", async () => {
+    const { store, storage } = harness();
+    const pending = await store.createPending(new Uint8Array([6]));
+    const activated = await store.activate(pending.id);
+
+    await expect(store.activate(pending.id)).resolves.toEqual(activated);
+    expect(storage.listCalls).toEqual([
+      `umc-photo-booth/sessions/active/${pending.id}/`,
+    ]);
   });
 
   it("rejects a forged token whose expiry does not match the stored pathname", async () => {
@@ -127,5 +141,6 @@ describe("BlobSessionStore", () => {
     expect(stats).toMatchObject({ pending: 0, active: 0, deletedPending: 1, deletedExpired: 1 });
     expect(storage.objects.size).toBe(0);
     expect(abandoned.id).not.toBe(activePending.id);
+    expect(storage.listCalls.at(-1)).toBe("umc-photo-booth/sessions/");
   });
 });

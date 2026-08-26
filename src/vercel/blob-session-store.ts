@@ -82,11 +82,10 @@ export class BlobSessionStore {
 
   async activate(id: string): Promise<{ id: string; publicToken: string; expiresAt: number }> {
     assertSessionId(id);
-    const existing = await this.findActive(id);
-    if (existing) return issued(existing);
-
     const source = pendingPath(id);
     if (!await this.storage.exists(source)) {
+      const existing = await this.findActive(id);
+      if (existing) return issued(existing);
       throw new CloudSessionNotFoundError();
     }
 
@@ -155,10 +154,9 @@ export class BlobSessionStore {
 
   async sweep(): Promise<CloudSessionStats> {
     const now = this.clock.now();
-    const [pending, active] = await Promise.all([
-      this.listAll(pendingPrefix),
-      this.listAll(activePrefix),
-    ]);
+    const blobs = await this.listAll(`${rootPrefix}/`);
+    const pending = blobs.filter((blob) => blob.pathname.startsWith(pendingPrefix));
+    const active = blobs.filter((blob) => blob.pathname.startsWith(activePrefix));
     const stalePending = pending.filter((blob) => blob.uploadedAt.getTime() + this.pendingTtlMs <= now);
     const parsedActive = active
       .map(parseActiveEntry)

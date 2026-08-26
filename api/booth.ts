@@ -8,7 +8,7 @@ import {
   CloudSessionNotFoundError,
 } from "../src/vercel/blob-session-store.js";
 
-const activeTtlMs = 5 * 60 * 1_000;
+const activeTtlMs = 10 * 60 * 1_000;
 const pendingTtlMs = 2 * 60 * 1_000;
 const maxCiphertextBytes = 4_000_000;
 const operatorEvents = new Set(["team_start", "completed_qr"]);

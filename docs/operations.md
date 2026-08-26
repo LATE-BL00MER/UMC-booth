@@ -30,11 +30,19 @@ Confirm all of the following:
 - The front sign reads `친구와 무료 네컷 촬영 · 휴대폰으로 바로 저장`.
 - The front-sign subcopy reads `앱 설치 없음 · 사진은 10분 후 삭제`.
 
+### Vercel-hosted event budget
+
+When the production Vercel deployment is used instead of the local tunnel, keep exactly one authenticated operator tab open. Close rehearsal tabs when they are no longer in use; multiple operator tabs perform independent readiness polling.
+
+The production cleanup policy performs one Blob listing at startup and then at most one listing every five minutes. A normal completed team uses two additional Blob advanced operations: one upload and one activation copy. For the September 1–2 schedule (six hours per day), reserve at least 550 Blob advanced operations. This covers twelve hours at the physical maximum of fifteen teams per hour plus periodic cleanup, with a small operational buffer.
+
+Before each event day, check **Vercel → Usage → Blob Advanced Operations**. Do not start the hosted booth if fewer than 550 operations remain for both days combined; use the documented local-tunnel fallback or increase the Vercel allowance first.
+
 ## Staff script and normal team flow
 
 Invite teams of 1–4 people: “친구와 무료 네컷 촬영 · 휴대폰으로 바로 저장.” Ask everyone to confirm consent on the operator screen. Guide them through six poses, then let them select four photos in their preferred order and choose a frame.
 
-When the QR is issued, tell every team member to scan the same QR with their own phone. They can independently open and save the same completed photo during the ten-minute timer. Never display a participant’s live camera view or completed photo anywhere other than the operator screen.
+When the QR is issued, tell every team member to scan the same QR with their own phone. They can independently open and save the same completed photo during the ten-minute timer. The link becomes inaccessible when the timer ends; the encrypted server copy is removed by the next cleanup sweep. Never display a participant’s live camera view or completed photo anywhere other than the operator screen.
 
 The recipient must choose **사진 저장하기** before the application CTA appears. Do not promise that a QR remains valid beyond its displayed timer.
 

@@ -30,7 +30,7 @@ describe("loadConfig", () => {
       selectedCount: 4,
       tunnelMode: "quick",
       localPublicBaseUrl: null,
-      activeTtlMs: 300_000,
+      activeTtlMs: 600_000,
       pendingTtlMs: 120_000,
       sweepIntervalMs: 30_000,
       countdownTickMs: 1_000,
